@@ -1,0 +1,10 @@
+# logs
+logs/
+*.log
+
+# notes, promopts and summaries
+docs/
+
+# dragon outputs and analysis outputs
+data/
+outputs/
