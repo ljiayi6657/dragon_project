@@ -1,0 +1,51 @@
+# config.yaml   
+MC_settings:                                 # hyperparameters of the gradient descent algorithm
+  lossparameter: "ml"                            #which quality parameter to use as loss (see fitspectra-HeP.py for description)
+  start_point: "Best"                        #options: "Best" or "Random" or "Farthest" or "FarGood" or "Hash"
+  start_hash: "5a2772b23a6d92e96fe3fd212a0d221fd0cd673d091424845a3ecd2e3825a810"
+  step_length: 0.02      
+  min_dist: 0.05
+  accept_prob_exponent: 2                       #exponent of argument of tangent  probability of accepting new point 
+  accept_far_only: true                         #accept point with worse likelihood only if it is farther from the start point than the previous point
+  base_ref_point:   "Start"                     #"Start" or "Best"
+  base_ref_factor: 0.97                         #multiplied with loss of reference point
+  infliketreatment: "remove"
+  maxloss: "maxval"                             #"maxval" for maximum value of loss in of points, or integer
+  NN_assist:  true
+  
+preset_parameters:                              # Used for setting parameter values which are not supposed to be part of optimisation (if none, leave empty)
+  highexp: 0.0001
+  #spiralwidth: 0.3
+  #diffexp: 0.5
+  #lowexp: 0.3333
+  
+comp_settings:                                # computational settings
+  simulation_IP: 52                           # which computer to run simulations on
+  load_previous: false                            # load most recent data with same runsettings or take current best point instead
+  max_steps: 12                               # How many steps to calculate (set null if unlimited)  
+  autorestart: true
+
+NN_settings:
+  n_train: 1
+  n_rand_points: 1000
+  LSF: 0.5
+  ACF: "gelu"
+  NEP: 12000
+  NCL: 3
+  BSP: 10
+
+paths:                                        # paths to files/folders used by the script
+  #fitmode:  "SiP-conv"
+  #expstr:   "CAL_NV_Be_CHe"
+  
+  fitmode:  "HeP-conv"
+  expstr:   ""
+  
+  progress_dir: "/home/motz/CALETana/prop/MarkovChain/MCData"               # directory of previous progress safe folders
+
+  fitSpectra_path: "/home/motz/CALETana/astro/fitspectra-%s.py"
+  dragondata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-%s_fitsave%s-5.0.dat" 
+  #dragonbkg_path: "/home/motz/dragon_calet/dragonbkgautoSi.py"    
+  dragonbkg_path: "/home/motz/dragon_calet/dragonbkgauto.py" # path to dragonbkg.py
+  ANN_save_folder: "/ssdhome/motz/neural/NN_test"  
+  

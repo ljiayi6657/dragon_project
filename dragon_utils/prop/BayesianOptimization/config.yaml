@@ -1,0 +1,32 @@
+# config.yaml   
+bayes_settings:                                 # hyperparameters of the gradient descent algorithm
+  lossparameter: "q"                            #which quality parameter to use as loss (see fitspectra-HeP.py for description)
+  start_point: "Best"                           #options: "Best" or "Random" or "Farthest" or "FarGood"
+  n_calls: 100                                    # How many points should be evaluated
+  n_closest_points: "Global"                          # how many closest points are taken into account for fitting the gaussian process: for all set "Global", otherwise int
+  volume_factor: 3.0                            # How much to increase volume of search space around best points (e.g. 2 equals doubled volume)
+  infliketreatment: "replace"
+  maxloss: "maxval"                             #"maxval" for maximum value of loss in of points, or integer
+  
+preset_parameters:                              # Used for setting parameter values which are not supposed to be part of optimisation (if none, leave empty)
+  highexp: 0.0001
+  spiralwidth: 0.3
+  diffexp: 0.5
+  lowexp: 0.3333
+  
+comp_settings:                                # computational settings
+  simulation_IP: 58                          # which computer to run simulations on
+  load_previous: false                            # load most recent data with same runsettings or take current best point instead
+
+paths:                                        # paths to files/folders used by the script
+  progress_dir: "/home/motz/CALETana/prop/BayesianOptimization/OptData"               # directory of previous progress safe folders
+
+  #fitSpectra_path: "/home/motz/CALETana/astro/fitspectra-HeP.py"                           # path to fitspectra-xxx.py
+  fitSpectra_path: "/home/motz/CALETana/astro/fitspectra-HeP-conv.py"
+  #dragondata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-HeP_fitsave-5.0.dat"     # path to dragon simulation data in "fitspectra-xxx-5.0.dat"
+  dragondata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-HeP-conv_fitsave-5.0.dat" 
+  dragonbkg_path: "/home/motz/dragon_calet/dragonbkgauto.py"                                   # path to dragonbkg.py
+  
+  # fitSpectra_path: "/home/ehanser/CALETana/astro/fitspectra-SiP.py"                            
+  # dragondata_path: "/home/ehanser/CALETana/astro/CALplots/fitspectra-SiP_fitsaveCAL_NV_Be_CHe-5.0.dat"
+  # dragonbkg_path: "/home/ehanser/dragon_calet/dragonbkg_Si.py"

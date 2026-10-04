@@ -8,3 +8,32 @@ docs/
 # dragon outputs and analysis outputs
 data/
 outputs/
+
+# Prop local environment and generated data
+/dragon_utils/prop/.venv/
+/dragon_utils/prop/**/__pycache__/
+/dragon_utils/prop/**/.ipynb_checkpoints/
+/dragon_utils/prop/BayesianOptimization/OldData/
+/dragon_utils/prop/BayesianOptimization/OptData/
+/dragon_utils/prop/GradientDescent/DescentData/
+/dragon_utils/prop/GradientDescent/OldData/
+/dragon_utils/prop/MarkovChain/MCData/
+/dragon_utils/prop/MLModelFits/Data/
+/dragon_utils/prop/MLModelFits/BestModels/
+/dragon_utils/prop/neural/NN_data/
+/dragon_utils/prop/neural/NN_test/
+/dragon_utils/prop/common/PSplots/
+/dragon_utils/prop/helmod/HelModArchives/
+/dragon_utils/prop/ComparisonPlots/plots/
+
+# Prop generated files outside the data folders
+/dragon_utils/prop/**/*.dat
+/dragon_utils/prop/**/*.log
+/dragon_utils/prop/**/*.npz
+/dragon_utils/prop/**/*.pkl
+/dragon_utils/prop/**/*.keras
+/dragon_utils/prop/**/*.pyc
+/dragon_utils/prop/**/*.png
+/dragon_utils/prop/**/*.jpg
+/dragon_utils/prop/**/*.jpeg
+/dragon_utils/prop/**/*.pdf

@@ -1,0 +1,37 @@
+# config.yaml
+plot_settings:     
+  lossparameter: "ml"                           #which quality parameter to use as loss (see fitspectra-HeP.py for description)
+                                                # hyperparameters of the gradient descent algorithm
+  n_closest_points: "Global"                    # how many closest points are taken into account for fitting the ridge model: for all set "Global", otherwise int
+  scaler: "Standard"                              #options: "Standard" or Robust
+  start_point: "Best"                           #options: "Best" or "Random" or "Farthest"
+  weighting: "None"                             # Weighting of closest point during fit: "Exponential" (exp(-loss)) or "Distance" ((1+1/d)^dwp) or "None" (all have same weight)                
+  dist_weight_power: 1                          # parameter dwp for "Distance" weigth option
+  infliketreatment: "remove"                                    #"replace"
+  maxloss: "maxval"                             #"maxval" for maximum value of loss in of points, or integer
+  force_center: true                            # shift data so that startpoint for gradient descent is at position 0 with loss 0 (does not work with "Spline"?)  
+           
+  useinterpoldata: false
+  useinterpolbest: false
+  interpoldataweight: 0.01
+  
+preset_parameters:                              # Used for setting parameter values which are not supposed to be part of optimisation (if none, leave empty)
+  highexp: 0.0001
+  #spiralwidth: 0.3
+  #diffexp: 0.5
+  #lowexp: 0.3333
+  
+paths:                                        # paths to files/folders used by the script
+  #fitmode:  "SiP-conv"
+  #expstr:   "CAL_NV_Be_CHe"
+  
+  fitmode:  "HeP-conv"
+  expstr:   ""
+  
+  progress_dir: "/home/motz/CALETana/prop/common/PSplots"                # directory of previous progress safe folders
+
+
+  fitSpectra_path: "/home/motz/CALETana/astro/fitspectra-%s.py"                           # path to fitspectra-xxx.py
+  dragondata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-%s_fitsave%s-5.0.dat"     # path to dragon simulation data in "fitspectra-xxx-5.0.dat"
+  interpoldata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-%s_interpolmap-5.0.dat"     # path to dragon simulation data in "fitspectra-xxx-5.0.dat"
+  

@@ -1,0 +1,35 @@
+# config.yaml
+NN_settings:     
+  lossparameter: "ml"                           #which quality parameter to use as loss (see fitspectra-HeP.py for description)
+                                                # hyperparameters of the gradient descent algorithm
+  n_closest_points: "Global"                    # how many closest points are taken into account for fitting the ridge model: for all set "Global", otherwise int
+  scaler: "Standard"                              #options: "Standard" or Robust
+  start_point: "Best"                           #options: "Best" or "Random" or "Farthest"
+  weighting: "Distance"                             # Weighting of closest point during fit: "Exponential" (exp(-loss)) or "Distance" ((1+1/d)^dwp) or "None" (all have same weight)                
+  dist_weight_power: 1                          # parameter dwp for "Distance" weigth option
+  infliketreatment: "remove"                                    #"replace"
+  maxloss: "maxval"                             #"maxval" for maximum value of loss in of points, or integer 
+  learning_rate: 0.01                           # Step size of gradient  (if momentum type is "Auto" this is used as the upper limit)
+  useinterpoldata: false
+
+  interpoldataweight: 0.01
+
+preset_parameters:                              # Used for setting parameter values which are not supposed to be part of optimisation (if none, leave empty)
+  highexp: 0.0001
+  
+comp_settings:                                  # computational settings
+  neural_IP: 56                            # which computer to run neural network on
+  simulation_IP: 56                            # which computer to run simulations on
+  max_steps: 100       
+
+paths:                                        # paths to files/folders used by the script
+  progress_dir: "/home/motz/CALETana/prop/neural/NN_data"                # directory of previous progress safe folders
+
+  #fitSpectra_path: "/home/motz/CALETana/astro/fitspectra-HeP.py"                           # path to fitspectra-xxx.py
+  #fitSpectra_path: "/home/motz/CALETana/astro/fitspectra-HeP-NB.py"                           # path to fitspectra-xxx.py
+  fitSpectra_path: "/home/motz/CALETana/astro/fitspectra-HeP-conv.py"                           # path to fitspectra-xxx.py
+  #dragondata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-HeP_fitsave-5.0.dat"     # path to dragon simulation data in "fitspectra-xxx-5.0.dat"
+  #dragondata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-HeP-NB_fitsave-5.0.dat"     # path to dragon simulation data in "fitspectra-xxx-5.0.dat"
+  dragondata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-HeP-conv_fitsave-5.0.dat"     # path to dragon simulation data in "fitspectra-xxx-5.0.dat"
+  interpoldata_path: "/home/motz/CALETana/astro/CALplots/fitspectra-HeP-conv_interpolmap-5.0.dat"     # path to dragon simulation data in "fitspectra-xxx-5.0.dat"
+  dragonbkg_path: "/home/motz/dragon_calet/dragonbkgauto.py"                                   # path to dragonbkg.py
