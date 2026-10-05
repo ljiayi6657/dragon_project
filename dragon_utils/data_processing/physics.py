@@ -14,10 +14,12 @@ def SM_output(
     PhiP=0.5,
     Mass=0.938,
     output_energies=None,
-    allow_extrapolation=True
+    allow_extrapolation=False,
+    charge=1,
+    massnum=1
 ):
     """
-    Apply force-field solar modulation to a proton LIS spectrum.
+    Apply force-field solar modulation to a LIS spectrum per nucleon.
 
     The LIS flux is interpolated in log-energy/log-flux space and
     evaluated at the shifted energy E + PhiP. The solar modulation
@@ -33,11 +35,11 @@ def SM_output(
         strictly positive for log-log interpolation.
 
     PhiP : float, optional
-        Solar modulation potential in GV. For protons, its numerical
-        value corresponds to an energy shift in GeV. Default is 0.5.
+        Solar modulation potential in GV. The energy shift is
+        abs(charge) * PhiP / massnum in GeV per nucleon.
 
     Mass : float, optional
-        Particle mass in GeV. Default is 0.938 for protons.
+        Particle mass in GeV per nucleon.
 
     output_energies : array-like, optional
         Energy points at which the modulated spectrum is calculated.
@@ -45,7 +47,10 @@ def SM_output(
 
     allow_extrapolation : bool, optional
         Whether to allow LIS extrapolation outside the original
-        energy range. Default is True.
+        energy range. Default is False.
+
+    charge, massnum : float, optional
+        Nuclear charge and mass number.
 
     Returns
     -------
@@ -98,15 +103,18 @@ def SM_output(
             "log-log interpolation."
         )
 
-    if PhiP < 0:
+    if not np.isfinite(PhiP) or PhiP < 0:
         raise ValueError(
             "PhiP must be non-negative."
         )
 
-    if Mass <= 0:
+    if not np.isfinite(Mass) or Mass <= 0:
         raise ValueError(
             "Mass must be positive."
         )
+
+    if not np.isfinite(charge) or not np.isfinite(massnum) or massnum <= 0 or charge == 0:
+        raise ValueError("charge and massnum must be finite and nonzero.")
 
     # Sort the LIS spectrum by energy
     sort_indices = np.argsort(Elist)
@@ -141,7 +149,8 @@ def SM_output(
         )
 
     # The LIS must be evaluated at the shifted energy
-    E_shifted = E_mod + PhiP
+    phi_eff = abs(charge) * PhiP / massnum
+    E_shifted = E_mod + phi_eff
 
     # Check whether extrapolation is needed
     outside_range = (
@@ -187,7 +196,7 @@ def SM_output(
     # Calculate the modulation factor using the external function
     modulation_factor = solmod(
         E_mod,
-        PhiP,
+        phi_eff,
         Mass
     )
 

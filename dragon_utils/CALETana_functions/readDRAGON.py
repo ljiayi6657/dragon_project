@@ -131,10 +131,11 @@ def readDragonBKGautoSiP(dragonfilename,dragonoutpath,corrfact,Dragonvals=False,
 
 
 # Calculate B/C ratio from DRAGON output
-def BCratio(NUC_5010, NUC_5011, NUC_6012,NUC_6013):
+def BCratio(NUC_5010, NUC_5011, NUC_6012, NUC_6013, NUC_6014=0):
     B=NUC_5010+NUC_5011
-    C=NUC_6012+NUC_6013
-    
+    C=NUC_6012+NUC_6013+NUC_6014
+    if not math.isfinite(B) or not math.isfinite(C) or B < 0 or C <= 0:
+        raise ValueError("B/C requires finite boron and positive carbon flux")
     return B/C
 
 

@@ -30,3 +30,20 @@ paths:                                        # paths to files/folders used by t
   # fitSpectra_path: "/home/ehanser/CALETana/astro/fitspectra-SiP.py"                            
   # dragondata_path: "/home/ehanser/CALETana/astro/CALplots/fitspectra-SiP_fitsaveCAL_NV_Be_CHe-5.0.dat"
   # dragonbkg_path: "/home/ehanser/dragon_calet/dragonbkg_Si.py"
+
+# Temporary Task 2 integration bounds, not physical Task 3 search bounds.
+local:
+  binary: /home/ljiayi/DRAGON2-Beta_version-master/DRAGON
+  sample: /home/ljiayi/DRAGON2-Beta_version-master/output/BaseModel_DRAGONxsec.txt
+  bounds:
+    D0: [4.12, 4.20]
+    deltaZ: [0.019, 0.021]
+  seed:
+    D0: 4.16
+    deltaZ: 0.02
+  seedValue: 17
+  phi:
+    p: 0.64
+    He: 0.64
+    BC: 0.62
+  timeout: 7200

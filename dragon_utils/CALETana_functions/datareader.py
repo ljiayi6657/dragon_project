@@ -5,7 +5,7 @@ import os, sys, time, math, pickle
 nucdat={}
 dalton=931.494/1000.0
 nucdat["p"]=(1,1,938.272046/1000.0)
-nucdat["He"]=(2,3.667,3.727379508)
+nucdat["He"]=(2,4,3.727379508)
 nucdat["Li"]=(3,6.515,6.515*dalton)
 nucdat["Be"]=(4,7.788,7.788*dalton)
 nucdat["B"]=(5,10.81,10.81*dalton)
@@ -2153,8 +2153,8 @@ def readamsproflxvals(basepath='../',convtoE=True):
         eflx,En2=RtoE(sumflx,R2,"p")
         eflx,En=RtoE(sumflx,R,"p")
         sumerr=math.sqrt(staterr*staterr+syserr*syserr)*pow(10,expo)/10000.0
-        eerrup,En=RtoE(flux+sumerr,R,"p")
-        eerrdown,En=RtoE(flux-sumerr,R,"p")
+        eerrup,En=RtoE(sumflx+sumerr,R,"p")
+        eerrdown,En=RtoE(sumflx-sumerr,R,"p")
         eerrup=eerrup-eflx
         eerrdown=-(eerrdown-eflx)
         eerr=0.5*(eerrup+eerrdown)
@@ -2204,6 +2204,7 @@ def readcalproflxvals(basepath='../',convtoR=False):
 
 def readcal2021proflxvals(basepath='../',convtoR=False):
     calfile=open(basepath+'nucdata/protoncalet2021.dat','r')
+    calvals={}
     calvals={}
     while True:
         stringline = calfile.readline()
@@ -2416,8 +2417,8 @@ def readamsHEflxvals(basepath='../',convtoE=True):
         eflx,En1=RtoE(sumflx,R1,"He")
         eflx,En2=RtoE(sumflx,R2,"He")
         eflx,En=RtoE(sumflx,R,"He")
-        eerrup,En=RtoE(flux+sumerr,R,"He")
-        eerrdown,En=RtoE(flux-sumerr,R,"He")
+        eerrup,En=RtoE(sumflx+sumerr,R,"He")
+        eerrdown,En=RtoE(sumflx-sumerr,R,"He")
         eerrup=eerrup-eflx
         eerrdown=-(eerrdown-eflx)
         eerr=0.5*(eerrup+eerrdown)
@@ -3321,7 +3322,6 @@ def readamsBCratioold(basepath='../'):
 def readamsBCratio(basepath='../'):
     amsfile=open(basepath+'BCdata/AMS-BC-2016.dat','r')
     AMSvals={}
-    headerline = amsfile.readline()
     while True:
         stringline = amsfile.readline()
         if stringline=='':

@@ -89,32 +89,10 @@ def interBCratio(DRAGON_output, BCratio_obs, interpolatetype):
 
 
 
-def chisquare(obs, exp, error, dof = None):
-    """
-    This function is used to calculate the chi-square value/reduced chi-square value (depends on if dof is given). If dof is given, reduced chi-square value will be returned, otherwise chi-square value will be returned.
-
-    Inputs:
-    obs (nparray)      : Observed data.
-    exp (nparray)      : Expected data.
-    error (nparray)    : Error associated with observed data.
-    dof (int, optional): Degree of freedom.
-
-    Outputs:
-    chi2 (float): Chi-square value or reduced chi-square value.
-
-    KEYWORDS: chi-square, reduced chi-square
-    """
-    if len(obs) != len(exp) or len(obs) != len(error):
-        print("Error: Length of lists do not match. (chisquare)")
-    elif dof is None:
-        chi2 = np.sum( ((obs - exp) / error) ** 2 )
-        return chi2
-    elif isinstance(dof, int):
-        chi2 = np.sum( ((obs - exp) / error) ** 2 ) / dof
-        return chi2
-    else:
-        print("Error: dof should be an integer. (chisquare)")
-        return None
+def chisquare(obs, exp, error, dof=None, covariance=None, return_points=False, positive=True):
+    """Use the validated project chi-square implementation."""
+    from dragon_utils.data_processing.statistic_analysis import chisquare as evalchi
+    return evalchi(obs, exp, error, dof, covariance, return_points, positive)
    
 
 
@@ -123,115 +101,19 @@ def chisquare(obs, exp, error, dof = None):
 def solmod(Ek,phi,M):
     return Ek*(Ek+2.0*M)/((Ek+phi)*(Ek+phi+2.0*M))
 
-def SM_output(Elist, Flux, PhiP=0.5, Mass = 0.938, output_energies=None):
-    """
-    Apply solar modulation to DRAGON output proton flux spectrum.
-    
-    This function takes a DRAGON output dictionary (as read by readDRAGON),
-    applies solar modulation using the force-field approximation, and returns
-    the modulated spectrum.
-    
-    Inputs:
-    Flux (nparray): Proton flux array from DRAGON output
-    Elist (nparray): Energy array from DRAGON output
-                         and values are lists with proton flux as the first element [0]
-    PhiP (float): Solar modulation potential in GV (default: 0.5)
-    Mass (float): Particle mass in GeV (default: 0.938 for portons)
-    output_energies (array, optional): Energy array for output. If None, uses input energies.
-    
-    Outputs:
-    E_mod (nparray): Energy array (GeV)
-    Flux_mod (nparray): Modulated proton flux array
-    
-    Keywords: solar modulation, DRAGON, proton flux
-    """
-    
-    # Ensure positive flux values for interpolation
-    Flux = np.maximum(Flux, 1e-30)
-    
-    # Proton mass (GeV)
-    M = Mass
-    
-    # Create interpolator for LIS (Local Interstellar Spectrum)
-    # Use log-log interpolation for better accuracy with power-law spectra
-    logE = np.log10(Elist)
-    logFlux = np.log10(Flux)
-    
-    # Create interpolator with extrapolation
-    # Use linear extrapolation for values outside the original range
-    f_lis = interp1d(logE, logFlux, kind='linear', 
-                     fill_value='extrapolate', 
-                     bounds_error=False)
-    
-    # Determine output energy array
-    if output_energies is None:
-        E_mod = Elist
-    else:
-        E_mod = np.array(output_energies)
-    
-    # Apply solar modulation to each energy point
-    Flux_mod = np.zeros_like(E_mod, dtype=float)
-    
-    for i, E in enumerate(E_mod):
-        # Skip non-positive energies
-        if E <= 0:
-            Flux_mod[i] = 0.0
-            continue
-            
-        # Calculate LIS at shifted energy (E + PhiP)
-        E_shifted = E + PhiP
-        
-        # Interpolate LIS at shifted energy (in log space)
-        if E_shifted > 0:
-            logE_shifted = np.log10(E_shifted)
-            logFlux_LIS = f_lis(logE_shifted)
-            Flux_LIS = 10**logFlux_LIS
-            # Ensure non-negative flux
-            Flux_LIS = max(Flux_LIS, 0.0)
-        else:
-            Flux_LIS = 0.0
-        
-        # Calculate solar modulation factor
-        solmodfact = solmod(E, PhiP, M)
-        
-        # Apply modulation: J_mod(E) = J_LIS(E + PhiP) * solmod(E, PhiP, M)
-        Flux_mod[i] = Flux_LIS * solmodfact
-    
-    return E_mod, Flux_mod
+def SM_output(Elist, Flux, PhiP=0.5, Mass=0.938, output_energies=None,
+              allow_extrapolation=False, charge=1, massnum=1):
+    """Apply the validated isotope-aware force-field calculation."""
+    from dragon_utils.data_processing.physics import SM_output as modulate
+    return modulate(Elist, Flux, PhiP, Mass, output_energies,
+                    allow_extrapolation, charge, massnum)
 
 
 
 def loglog_interp(E_Orig, y_Orig, E_obs, interpolatetype):
-    """
-    This function is used to interporlate data in log-log space.
-
-    Inputs:
-    E_Orig (nparray)          : Original energy data.
-    y_Orig (nparray)          : Original y data.
-    E_obs (nparray)           : Energy data to interpolate to.
-    interpolatetype (str): Type of interpolation method, e.g., 'linear', 'cubic', etc.
-
-    Outputs:
-    y_interp (nparray): Interpolated y data at E_obs.
-    """
-
-    # Transfer to log-space
-    logE_Orig= np.log10(E_Orig)
-    logE_obs = np.log10(E_obs)
-    logy_Orig= np.log10(y_Orig)
-
-
-    if interpolatetype == 'linear':
-        f = interp1d(logE_Orig, logy_Orig, kind='linear', fill_value="extrapolate")
-    elif interpolatetype == 'cubic':
-        f = interp1d(logE_Orig, logy_Orig, kind='cubic', fill_value="extrapolate")
-    else:
-        print("Error: Unsupported interpolation type. (loglog_interp)")
-
-    logy_interp = f(logE_obs)
-    y_interp = 10**logy_interp
-
-    return y_interp
+    """Interpolate positive spectra in log-log space without extrapolation."""
+    from dragon_utils.data_processing.flux import interp as sample
+    return sample(E_Orig, y_Orig, interpolatetype, logx=True, logy=True)(E_obs)
 
 
 def makesecflx(flx):

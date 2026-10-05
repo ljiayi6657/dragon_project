@@ -3,29 +3,39 @@
 import numpy as np
 import pandas as pd
 
-from sklearn.metrics import mean_squared_error
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
-from skopt.plots import plot_evaluations, plot_objective
-from skopt.space import Real, Integer, Space
-from skopt.plots import plot_convergence
-from skopt import gp_minimize
+from skopt import Optimizer
+from skopt.space import Real
 from sklearn.preprocessing import StandardScaler
-from scipy.spatial import KDTree
 
+import argparse
+import csv
+import hashlib
+import json
 import re
 import os
 import sys
-import joblib
+import shutil
+import uuid
 from collections import OrderedDict
 import pickle
 from datetime import datetime
+from pathlib import Path
 import subprocess
 import time
 import logging
 import getpass
 import random
 import yaml
+
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from dragon_utils.xml_manager.parameter_map import PARAM_MAP
+from dragon_utils.xml_manager.xml_modifier import find_one, get_param, load_xml, modify_xml, render_xml, set_param
+from dragon_utils.CALETana_functions.datareader import readamsproflxvals, readamsHEflxvals, readamsBCratio
+from dragon_utils.data_processing.physics import SM_output
+from dragon_utils.data_processing.statistic_analysis import chisquare
 
 # %%
 def update_data(fitSpectra_path):
@@ -208,59 +218,175 @@ def get_farthest_point(X, y, sX, maxloss=False):
     return far_X,far_y.values[0].item()
 
 # %%
-def submit_task(point, dragonbkg_path, IP, preset_parameters):
-    logging.info("\n")
-    logging.info("-"*20+"Submitting new point to simulation"+"-"*20)
+def submit_task(point, cfg, seen, dry=False):
+    bounds = cfg["bounds"]
+    names = list(bounds)
+    if set(point) != set(names):
+        raise ValueError("Candidate names do not match temporary bounds")
+    point = {name: float(point[name]) for name in names}
+    for name, value in point.items():
+        low, high = bounds[name]
+        if not np.isfinite(value) or not low <= value <= high:
+            raise ValueError(f"Invalid or out-of-range candidate: {name}={value}")
+    key = tuple(point.values())
+    if key in seen:
+        raise ValueError("Duplicate candidate")
 
-    dragonbkg_folder = os.path.dirname(dragonbkg_path)
-    dragonbkg_name = os.path.basename(dragonbkg_path)
-    os.chdir(dragonbkg_folder)
-    command = "./"+dragonbkg_name+" $DP " + str(IP)
-    param_dict={"indxscan":"sindex","ncut":"nuccut","deltscan":"diffexp","lowindex":"lowindx","lowdelt":"lowexp","lowdeltbreak":"lowdiffbreak",
-                "lowdbreaksoft":"lowdiffbreaksoft","Dscan":"diffnorm", "diffscaleheight":"DE","diffscaleradius":"DR","reaccscan":"alvel",
-                "highdelt":"highexp","deltbreak":"diffbreak","dbreaksoft":"diffbreaksoft","lowbreak":"lowbreak","lowsoft":"lowsoft","SW":"spiralwidth","convel":"convel"}
-    marker = "#Autoconfigblock"
+    base = ROOT / "dragon_utils/xml_manager/baseline.xml"
+    binary = Path(cfg["binary"])
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise FileNotFoundError(binary)
+    build = binary.parent
+    out = ROOT / "outputs/task2"
+    archive = ROOT / "data/dragon_output"
+    out.mkdir(parents=True, exist_ok=True)
+    archive.mkdir(parents=True, exist_ok=True)
+    stem = datetime.now().astimezone().strftime("%Y-%m-%d") + "_run-" + uuid.uuid4().hex[:12]
+    xml_path = out / f"{stem}.xml"
+    diff_path = out / f"{stem}.diff"
+    rec_path = out / f"{stem}.json"
+    source_out = build / "output"
+    if any(source_out.glob(stem + "*")):
+        raise FileExistsError("Run output already exists")
 
-    for _, row in point.iterrows():
-        # parse the parameters saved in point into the dragonbkg format
-        new_params = "\n"
-        for key, value in param_dict.items():
-            if value not in row.keys():
-                if value in preset_parameters.keys():
-                    par = preset_parameters[value] 
-                else:
-                    continue
-            else:
-                par = row[value]
-            if par<0.0001: par = 0.0001
-            if key in ["deltscan","Dscan","reaccscan","indxscan"]: new_params+=f"{key}=[{par:.4f}]\n"
-            else: new_params+=f"{key}={par:.4f}\n"
-            
-        # change parameters in dragonbkg file   
-        with open(dragonbkg_name, "r") as file:
-            content = file.read()
-        start_index = content.find(marker)
-        end_index = content.find(marker, start_index + len(marker))
-        if start_index != -1 and end_index != -1:
-            new_content = content[:start_index+len(marker)] + new_params + content[end_index:]
-            with open(dragonbkg_name, "w") as file:
-                file.write(new_content)
-                
-        # execute dragonbkg
-            with subprocess.Popen(command, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1, universal_newlines=True) as process:
-                while True:
-                    start_time = time.time()                    # To check whether we are caught in a loop
-                    output = process.stdout.readline().strip()  # IMPORTANT: in dragonbkg's "input('text')" prompts end all the lines with 'text\n', otherwise readline() cannnot read the input prompt and we wait forever!!!
-                    if type(output)!=str: output = output.decode()
-                    if output: 
-                        start_time=time.time()
-                        logging.info(f"{output}")
-                        if any(content in output for content in ["copy to remote PC", "add to execution list", "overwrite the file"]):
-                            process.stdin.write("y\n")
-                            process.stdin.flush()
-                            logging.info("y")
-                    if output == "" and process.poll() is not None: break
-                    if time.time() - start_time > 300: raise TimeoutError("No processable communication for > 5 minutes. Terminated simulation fitting!")
+    modify_xml(base, {name: repr(value) for name, value in point.items()}, xml_path, diff_path)
+    source_param = build / "config_files/template.source.param"
+    param_path = xml_path.with_suffix(".source.param")
+    if not source_param.is_file():
+        raise FileNotFoundError(source_param)
+    shutil.copy2(source_param, param_path)
+    base_doc = load_xml(base)
+    run_doc = load_xml(xml_path)
+    fixed = {}
+    actual = {}
+    for name in PARAM_MAP:
+        value = get_param(run_doc, name)
+        actual[name] = value
+        if name in point:
+            if float(value) != point[name]:
+                raise ValueError(f"Candidate was quantized: {name}")
+        else:
+            fixed[name] = get_param(base_doc, name)
+            if value != fixed[name]:
+                raise ValueError(f"Fixed XML parameter changed: {name}")
+    grid = find_one(run_doc, "//Grid")
+    if grid.get("type") != "3D" or float(actual["VariableDelta"]) != 1:
+        raise ValueError("Expected 3D VariableDelta model")
+    if float(actual["Zmin"]) > 1 or float(actual["Zmax"]) < 6:
+        raise ValueError("Required p, He, B and C nuclei are not propagated")
+    for name in ("partialstore", "fullstore"):
+        find_one(run_doc, "//Output/" + name)
+    if find_one(run_doc, "//Galaxy/Diffusion").get("type") == "Anisotropic":
+        raise ValueError("3D VariableDelta requires isotropic diffusion")
+    threshold = float(actual["DiffusionThreshold"])
+    slope = float(actual["deltaA"])
+    center = float(actual["deltaB"])
+    vertical = float(actual["deltaZ"])
+    maximum = center + slope * min(float(actual["Rmax"]), threshold) + vertical * float(actual["L"])
+    if min(threshold, slope, vertical) < 0 or center <= 0 or not np.isfinite(maximum):
+        raise ValueError("Invalid 3D VariableDelta input")
+    if maximum >= 2:
+        raise ValueError("3D VariableDelta reacceleration limit exceeded")
+    for name in point:
+        set_param(run_doc, name, get_param(base_doc, name))
+    if render_xml(run_doc) != render_xml(base_doc):
+        raise ValueError("A fixed XML setting changed")
+
+    with base.open("rb") as handle:
+        base_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    with xml_path.open("rb") as handle:
+        xml_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    with binary.open("rb") as handle:
+        bin_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    with (build / ".libs/DRAGON").open("rb") as handle:
+        core_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    with param_path.open("rb") as handle:
+        source_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    rec = {
+        "id": stem,
+        "status": "checked",
+        "candidate": point,
+        "order": names,
+        "bounds": bounds,
+        "units": {"D0": "1e28 cm2/s", "deltaZ": "kpc^-1"},
+        "paths": {name: PARAM_MAP[name] for name in names},
+        "actual": actual,
+        "fixed": fixed,
+        "baseline": str(base),
+        "baselineHash": base_hash,
+        "xml": str(xml_path),
+        "xmlHash": xml_hash,
+        "diff": str(diff_path),
+        "binary": str(binary),
+        "binaryHash": bin_hash,
+        "coreBinary": str(build / ".libs/DRAGON"),
+        "coreHash": core_hash,
+        "sourceParam": str(param_path),
+        "sourceHash": source_hash,
+        "sourceMode": "per-run copy",
+        "cwd": str(build),
+        "command": [str(binary), str(xml_path)],
+        "source": str(source_out / f"{stem}.txt"),
+        "record": str(rec_path),
+        "components": None,
+        "total": None,
+    }
+    if dry:
+        rec_path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        seen.add(key)
+        return rec
+
+    log = ROOT / "logs" / datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S.md")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    while log.exists():
+        time.sleep(1)
+        log = ROOT / "logs" / datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S.md")
+    start = datetime.now().astimezone()
+    stdout = ""
+    stderr = ""
+    code = None
+    try:
+        done = subprocess.run(rec["command"], cwd=build, capture_output=True,
+                              text=True, errors="replace", timeout=cfg["timeout"])
+        code, stdout, stderr = done.returncode, done.stdout, done.stderr
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or b""
+        stderr = exc.stderr or b""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", "replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
+        rec["error"] = "DRAGON2 timed out"
+    end = datetime.now().astimezone()
+    log.write_text("# DRAGON2 run " + stem + "\n\n"
+                   + "Command: " + json.dumps(rec["command"]) + "\n"
+                   + "Working directory: " + str(build) + "\n\n"
+                   + "## stdout\n\n" + stdout + "\n\n## stderr\n\n" + stderr + "\n",
+                   encoding="utf-8")
+    rec.update({"start": start.isoformat(), "end": end.isoformat(),
+                "returnCode": code, "log": str(log), "artifacts": []})
+    for source in sorted(source_out.glob(stem + "*")):
+        if not source.is_file():
+            continue
+        target = archive / source.name
+        if target.exists():
+            raise FileExistsError(target)
+        shutil.copy2(source, target)
+        with target.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        rec["artifacts"].append({"path": str(target), "sha256": digest,
+                                 "bytes": target.stat().st_size})
+    needed = {stem + ext for ext in (".txt", ".fits.gz", "_spectrum.fits.gz")}
+    saved = {Path(item["path"]).name for item in rec["artifacts"]}
+    if code == 0 and needed <= saved and all(item["bytes"] > 0 for item in rec["artifacts"]):
+        rec["status"] = "simulated"
+        rec["spectrum"] = str(archive / (stem + ".txt"))
+    else:
+        rec["status"] = "run_failed"
+        rec.setdefault("error", "Nonzero exit or missing/empty model product")
+    rec_path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+    seen.add(key)
+    return rec
 
 # %%
 def determine_bounds(X, Xscaler, volume_factor):
@@ -400,44 +526,131 @@ def checkSimulationProgress(X_data, y_data, X_fault, point_list, loss_list, maxl
     return simulation_finished, simulation_infnan
 
 # %%
-def obj_func(parameters, point_list, loss_list, Xscaler, computerIP, paths, cur_files, bounds, save_folder, init_X, init_y, bayes_settings, preset_parameters):
-    parameters = Xscaler.inverse_transform([parameters])[0].round(4)
-    point_list.append(pd.DataFrame(parameters).T)
-    point_list[-1].columns=init_X.columns
-    logging.info(f"New parameters:\n{point_list[-1]}")
-    
-    submit_task(point_list[-1], paths["dragonbkg_path"], computerIP, preset_parameters)
-    
-    while(True):
-        simulation_finished, simulation_infnan = False, False
-        
-        new_nfiles=update_data(paths["fitSpectra_path"])
-        
-        if (new_nfiles > cur_files): 
-            current_nfiles = new_nfiles
-            X_data, y_data, X_scaled, y_scaled, Xscaler, yscaler, X_fault, maxloss = load_data(paths["dragondata_path"],bayes_settings,preset_parameters)
-          
-            simulation_finished, simulation_infnan = checkSimulationProgress(X_data, y_data, X_fault, point_list, loss_list, maxloss)
-        
-        if simulation_finished:
-            save_current_data(init_X, init_y, point_list, loss_list, bounds, save_folder)
-            # if not simulation_infnan: return yscaler.transform(loss_list[-1])
-            if not simulation_infnan:
-                print("simulation completed, loss parameter: ",loss_list[-1])
-                if loss_list[-1]>maxloss:
-                     print("loss > maxloss, replaced with maxloss")
-                     loss_list[-1]=maxloss
-                     return maxloss
+def obj_func(point, cfg, seen, rec=None):
+    if rec is None:
+        rec = submit_task(point, cfg, seen)
+    else:
+        if rec["returnCode"] != 0 or rec["candidate"] != point:
+            raise ValueError("Resume record does not match a successful candidate")
+        for name, path, digest in (("XML", rec["xml"], rec["xmlHash"]),
+                                   ("source", rec["sourceParam"], rec["sourceHash"]),
+                                   ("binary", rec["binary"], rec["binaryHash"]),
+                                   ("core", rec["coreBinary"], rec["coreHash"]),
+                                   ("spectrum", rec["spectrum"], next(
+                                       item["sha256"] for item in rec["artifacts"]
+                                       if item["path"] == rec["spectrum"]))):
+            with Path(path).open("rb") as handle:
+                if hashlib.file_digest(handle, "sha256").hexdigest() != digest:
+                    raise ValueError(f"Resume {name} hash mismatch")
+        seen.add(tuple(point[name] for name in cfg["bounds"]))
+        rec["initialFailure"] = rec.get("error")
+        rec.pop("error", None)
+        rec["status"] = "simulated"
+    if rec["status"] != "simulated":
+        return rec
+    try:
+        spec = Path(rec["spectrum"])
+        with spec.open(encoding="utf-8") as handle:
+            header = handle.readline().split()
+        if header[:2] != ["Energy", "[GeV]"]:
+            raise ValueError("Invalid DRAGON2 ASCII header")
+        columns = header[2:]
+        required = ("Pri_p", "Sec_p", "NUC_2003", "NUC_2004",
+                    "NUC_5010", "NUC_5011", "NUC_6012", "NUC_6013", "NUC_6014")
+        if any(columns.count(name) != 1 for name in required):
+            raise ValueError("Required isotope column missing or duplicated")
+        data = np.loadtxt(spec, skiprows=1)
+        if data.ndim != 2 or data.shape[0] < 2 or data.shape[1] != len(columns) + 1:
+            raise ValueError("Incomplete DRAGON2 ASCII table")
+        if not np.all(np.isfinite(data)) or np.any(data[:, 0] <= 0) or np.any(np.diff(data[:, 0]) <= 0):
+            raise ValueError("Invalid model energy axis or values")
+        energy = data[:, 0]
+        base = str(ROOT / "data/experiment_data/expdata") + "/"
+        observed = {
+            "p": readamsproflxvals(base, convtoE=False),
+            "He": readamsHEflxvals(base, convtoE=False),
+            "BC": readamsBCratio(base),
+        }
+        limits = {"p": 30, "He": 30, "BC": 10}
+        counts = {"p": 36, "He": 37, "BC": 40}
+        species = {
+            "p": (("p", 1, 1, 0.938272046),),
+            "He": (("NUC_2003", 2, 3, 3 * 0.931494),
+                   ("NUC_2004", 2, 4, 3.727379508)),
+            "BC": (("NUC_5010", 5, 10, 10 * 0.931494),
+                   ("NUC_5011", 5, 11, 11 * 0.931494),
+                   ("NUC_6012", 6, 12, 12 * 0.931494),
+                   ("NUC_6013", 6, 13, 13 * 0.931494),
+                   ("NUC_6014", 6, 14, 14 * 0.931494)),
+        }
+        parts = {}
+        rows = []
+        for mode in ("p", "He", "BC"):
+            points = [(float(axis), float(vals[0]), float(vals[1]), vals[2])
+                      for axis, vals in observed[mode].items() if vals[2][0] >= limits[mode]]
+            if len(points) != counts[mode]:
+                raise ValueError(f"Unexpected observation count for {mode}")
+            axis = np.array([item[0] for item in points])
+            obs = np.array([item[1] for item in points])
+            error = np.array([item[2] for item in points])
+            model = np.zeros(len(points))
+            boron = np.zeros(len(points))
+            carbon = np.zeros(len(points))
+            phi = cfg["phi"][mode]
+            for name, charge, massnum, mass in species[mode]:
+                if mode == "BC":
+                    kinetic = axis
                 else:
-                    return loss_list[-1]
-            else:
-                print("simulation completed, but fit to data returned inf or nan")
-                return maxloss
-        
-        # loss_list.append(1)
-        # return 1  
-        
-        time.sleep(600)
+                    kinetic = (np.sqrt((charge * axis) ** 2 + mass ** 2) - mass) / massnum
+                if mode == "p":
+                    primary = data[:, columns.index("Pri_p") + 1]
+                    secondary = data[:, columns.index("Sec_p") + 1]
+                    if np.any(primary <= 0) or np.any(secondary < 0):
+                        raise ValueError("Invalid proton component")
+                    flux = (primary + secondary) / 10000
+                else:
+                    flux = data[:, columns.index(name) + 1] / 10000
+                _, toa = SM_output(energy, flux, PhiP=phi, Mass=mass / massnum,
+                                   output_energies=kinetic, charge=charge, massnum=massnum)
+                if mode == "BC":
+                    if name.startswith("NUC_5"):
+                        boron += toa
+                    else:
+                        carbon += toa
+                else:
+                    total = massnum * kinetic
+                    model += toa * charge * np.sqrt(total * (total + 2 * mass)) / (
+                        massnum * (total + mass))
+            if mode == "BC":
+                if np.any(carbon <= 0):
+                    raise ValueError("Nonpositive carbon denominator")
+                model = boron / carbon
+            result = chisquare(obs, model, error, return_points=True)
+            parts[mode] = result["chi2"]
+            for i, item in enumerate(points):
+                rows.append({
+                    "run": rec["id"], "observable": mode, "axis": item[0],
+                    "lower": item[3][0], "upper": item[3][1],
+                    "observed": obs[i], "model": model[i], "error": result["sigma"][i],
+                    "residual": result["residual"][i],
+                    "contribution": result["contribution"][i], "phi": phi,
+                })
+        total = float(sum(parts.values()))
+        if not np.isfinite(total) or total < 0:
+            raise ValueError("Invalid total chi-square")
+        out = ROOT / "outputs/task2" / (rec["id"] + "-residual.csv")
+        with out.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        with out.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        rec.update({"status": "scored", "components": parts, "total": total,
+                    "points": str(out), "pointsHash": digest, "count": counts})
+    except Exception as exc:
+        rec.update({"status": "evaluation_failed", "error": str(exc), "total": None})
+    Path(rec["record"]).write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+    return rec
 
 # %%
 def get_pointsInBounds(bounds, X, y):
@@ -454,85 +667,112 @@ def get_pointsInBounds(bounds, X, y):
 
 # %%
 def main():
-    # Initializing Variables
-    # 0. Load settings from "config.yaml" file in same folder as this script and potentially overwrite parameters
-    bayes_settings, preset_parameters, comp_settings, paths = load_config()
-    
-    save_folder = generate_saveFolderName(paths["progress_dir"], comp_settings["load_previous"], bayes_settings)
-    logging.basicConfig(
-        level = logging.DEBUG,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        filename = os.path.join(save_folder, "output.log")
-    )
-    logging.info(bayes_settings)
-    logging.info(comp_settings)
-    
-    point_list = []
-    loss_list = []
-    bounds = []
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--runs", type=int, default=2)
+    parser.add_argument("--resume")
+    args = parser.parse_args()
+    if args.runs not in (1, 2):
+        raise ValueError("Task 2 accepts one or two local runs")
+    with (Path(__file__).parent / "config.yaml").open(encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle)["local"]
+    names = list(cfg["bounds"])
+    if set(names) != set(cfg["seed"]):
+        raise ValueError("Seed and temporary bounds differ")
+    seen = set()
+    first = submit_task(cfg["seed"], cfg, seen, dry=True)
+    second = dict(cfg["seed"])
+    second[names[0]] = cfg["bounds"][names[0]][1]
+    if second == cfg["seed"]:
+        second[names[0]] = cfg["bounds"][names[0]][0]
+    other = submit_task(second, cfg, seen, dry=True)
+    if first["xmlHash"] == other["xmlHash"] or first["source"] == other["source"]:
+        raise ValueError("Preflight candidates share XML or output")
+    base = str(ROOT / "data/experiment_data/expdata") + "/"
+    observed = {
+        "p": readamsproflxvals(base, convtoE=False),
+        "He": readamsHEflxvals(base, convtoE=False),
+        "BC": readamsBCratio(base),
+    }
+    counts = {"p": 36, "He": 37, "BC": 40}
+    limits = {"p": 30, "He": 30, "BC": 10}
+    for mode, points in observed.items():
+        vals = [item for item in points.values() if item[2][0] >= limits[mode]]
+        if len(vals) != counts[mode]:
+            raise ValueError(f"Observation preflight failed for {mode}")
+        obs = np.array([item[0] for item in vals])
+        err = np.array([item[1] for item in vals])
+        if chisquare(obs, obs, err) != 0:
+            raise ValueError("Chi-square preflight failed")
+    sample = Path(cfg["sample"])
+    format_ok = False
+    if sample.is_file():
+        with sample.open(encoding="utf-8") as handle:
+            header = handle.readline().split()
+        format_ok = (header[:2] == ["Energy", "[GeV]"] and
+                     all(header.count(name) == 1 for name in
+                         ("Pri_p", "Sec_p", "NUC_2003", "NUC_2004",
+                          "NUC_5010", "NUC_5011", "NUC_6012", "NUC_6013", "NUC_6014")))
+        if not format_ok:
+            raise ValueError("Historical sample format is invalid")
+    check = {
+        "status": "passed", "first": first["record"], "second": other["record"],
+        "differentXml": True, "differentOutput": True, "observations": counts,
+        "sample": str(sample), "sampleFormat": format_ok,
+        "sampleUse": "header check only; never scored",
+    }
+    check_path = ROOT / "outputs/task2" / (
+        datetime.now().astimezone().strftime("%Y-%m-%d") + "_check-" + uuid.uuid4().hex[:12] + ".json")
+    check_path.write_text(json.dumps(check, indent=2) + "\n", encoding="utf-8")
+    print(f"Preflight: {check_path}", flush=True)
+    if args.check:
+        return
 
-    print("Update and fit potentially new datapoints                                                                ",end = '\r', flush=True)
-    new_nfiles=update_data(paths["fitSpectra_path"])
-    
-    print("Load newest data                                                                                         ",end = '\r', flush=True)
-    X_data, y_data, X_scaled, y_scaled, Xscaler, yscaler, X_fault, maxloss = load_data(paths["dragondata_path"],bayes_settings,preset_parameters)
-
-    print("Load closest points                                                                                      ",end = '\r', flush=True)
-    
-    
-    if bayes_settings["start_point"]=="Best":
-        start_X, start_y = top_results(X_data, y_data, 1)
-    elif bayes_settings["start_point"]=="FarGood":
-        medloss=float(np.median(y_data))    
-        start_X, start_y = get_farthest_point(X_data, y_data, X_scaled, medloss)
-        
-    if bayes_settings["n_closest_points"]=="Global": nX, ny = X_data, y_data
-    else: nX, ny = closest_points(X_data, y_data, start_X, int(bayes_settings["n_closest_points"]))
-    
-    print("Determine parameter bounds for later optimization (grown such that volume increased by factor)           ",end = '\r', flush=True)
-    bounds, bounds_scaled = determine_bounds(nX, Xscaler, float(bayes_settings["volume_factor"]))
-    
-    print("Extract all values within bounds grown double of volume factor (to already get info outside of box)      ",end = '\r', flush=True)
-    bX, by = get_pointsInBounds(bounds, X_data, y_data)
-    x0 = pd.DataFrame(Xscaler.transform(bX), columns=X_data.columns).values.tolist()
-    # y0 = pd.DataFrame(yscaler.transform(ny), columns=y_data.columns)[y_data.columns[0]].tolist()
-    y0 = by[y_data.columns[0]].tolist()
-    
-    print("Run bayesian optimization                                                                                ",end = '\r', flush=True)
-    n_jobs = os.cpu_count()-1
-    res = gp_minimize(
-                    func = lambda params: obj_func(
-                                            parameters=params, 
-                                            point_list=point_list, 
-                                            loss_list=loss_list, 
-                                            Xscaler=Xscaler,
-                                            computerIP=int(comp_settings["simulation_IP"]),
-                                            paths = paths, 
-                                            cur_files=new_nfiles,
-                                            bounds = bounds,
-                                            save_folder = save_folder,
-                                            init_X = bX,
-                                            init_y = by,
-                                            bayes_settings=bayes_settings,
-                                            preset_parameters=preset_parameters
-                                            ),
-                    dimensions = bounds_scaled,                 # List of search space dimensions
-                    # base_estimator = gpe,                     # Gaussian process estimator to use for optimization
-                    n_calls = int(bayes_settings["n_calls"]),   # Budget: number of calls to func
-                    n_initial_points=0,                         # Number of evaluations of func with initialization points
-                    # initial_point_generator = "lhs",          # Sets a initial points generator  
-                    acq_func = "EI",                            # Function to minimize over the gaussian prior
-                    x0 = x0,                                    # Initial input points
-                    y0 = y0,                                    # Evaluation of initial input points
-                    verbose = 1,                  
-                    kappa = 1.96,                               # Controls how much of the variance in the predicted values should be taken into account
-                    xi = 0.001,                                 # Controls how much improvement one wants over the previous best values
-                    noise = 10**-10,                            # Expected noise in output
-                    n_jobs=n_jobs
-                    )
-
-    save_current_data(bX, by, point_list, loss_list, bounds, save_folder) 
+    opt = Optimizer([Real(*cfg["bounds"][name], name=name) for name in names],
+                    base_estimator="GP", n_initial_points=1, random_state=cfg["seedValue"])
+    seen = set()
+    point = dict(cfg["seed"])
+    history = []
+    path = ROOT / "outputs/task2" / (
+        datetime.now().astimezone().strftime("%Y-%m-%d") + "_search-" + uuid.uuid4().hex[:12] + ".json")
+    for index in range(args.runs):
+        prior = None
+        if index == 0 and args.resume:
+            prior = json.loads(Path(args.resume).read_text(encoding="utf-8"))
+            if prior["status"] not in ("evaluation_failed", "simulated"):
+                raise ValueError("Only a completed simulation can be resumed")
+            if "sourceParam" not in prior:
+                source_param = Path(cfg["binary"]).parent / "config_files/template.source.param"
+                log = Path(prior["log"]).read_text(encoding="utf-8")
+                if "Using config_files/template.source.param!" not in log:
+                    raise ValueError("Cannot establish source file used by prior run")
+                if source_param.stat().st_mtime > datetime.fromisoformat(prior["start"]).timestamp():
+                    raise ValueError("Fallback source file changed after prior run")
+                param_path = Path(prior["xml"]).with_suffix(".source.param")
+                shutil.copy2(source_param, param_path)
+                with param_path.open("rb") as handle:
+                    prior["sourceHash"] = hashlib.file_digest(handle, "sha256").hexdigest()
+                prior["sourceParam"] = str(param_path)
+                prior["sourceMode"] = "fallback during run; copied after for replay"
+            core = Path(cfg["binary"]).parent / ".libs/DRAGON"
+            with core.open("rb") as handle:
+                prior["coreHash"] = hashlib.file_digest(handle, "sha256").hexdigest()
+            prior["coreBinary"] = str(core)
+        rec = obj_func(point, cfg, seen, rec=prior)
+        rec["index"] = index + 1
+        if rec["status"] == "scored":
+            opt.tell([point[name] for name in names], rec["total"])
+            point = dict(zip(names, opt.ask()))
+            rec["nextProposal"] = point
+        else:
+            rec["nextProposal"] = None
+        Path(rec["record"]).write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        history.append(rec)
+        path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
+        print(f"Run {index + 1}: {rec['status']} {rec['id']} chi2={rec['total']}", flush=True)
+        if rec["status"] != "scored":
+            raise RuntimeError(f"Run stopped: {rec['error']}; record: {rec['record']}")
+    print(f"Ordered record: {path}", flush=True)
 
 if __name__ == "__main__":
     main()
