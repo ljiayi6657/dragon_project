@@ -1,4 +1,0 @@
-kind,origin,energy,obs,model,residual,sigma,contribution
-p,synthetic,,10,12,-2,1,4
-He,synthetic,,5,4,1,0.5,4
-BC,synthetic,,0.2,0.22,-0.02,0.02,1
