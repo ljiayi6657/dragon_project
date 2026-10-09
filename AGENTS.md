@@ -27,13 +27,27 @@
 * **Outputs (Figures/Tables/CSVs)**: `~/dragon_project/outputs/<subfolder>/`
 * **Documentation**: `~/dragon_project/docs/`
 
+### Companion Compute Host
+
+* **SSH Address**: `ljiayi@192.168.72.54`; connect with `ssh ljiayi@192.168.72.54`.
+* 用户提到在 **companion** 上执行任务时，指通过 SSH 连接上述实验室内网主机进行计算。
+* 默认在本机准备和检查 XML，在 companion 上运行 DRAGON2，将本轮结果及全部运行日志同步回本机
+
+
 ## 3. Execution & Logging Rules
 
 * **Dragon/Dragon2 Logs**: Every time `dragon` or `dragon2` is executed, copy all output logs into `~/dragon_project/logs/`.
   * Naming format: `YYYY-MM-DD_HH-MM-SS.md`.
-* **Generated Outputs**:
+* **DRAGON/DRAGON2 XML Parameters**:
+  * All XML parameter files used, created, or stored by any task for DRAGON/DRAGON2 calculations must be kept in `/home/ljiayi/dragon_project/data/processed/`.
+  * Naming format: `YYYY-MM-DD_<task>.xml`.
+* **Generated Plots**:
+  * Save all generated plots directly in `/home/ljiayi/dragon_project/outputs/figures/`; do not create or use separate subfolders for plots.
+  * Naming format: `<task>_YYYY-MM-DD.png`.
+* **Other Generated Outputs**:
   * Save all generated images, tables, CSVs, etc., into corresponding subdirectories inside `~/dragon_project/outputs/`, unless the user specifies another location.
   * Naming format: `YYYY-MM-DD_<description>.<ext>` (use concise English for `<description>`, respecting the single-underscore limit where possible).
+  * Plots follow the dedicated plot rule above instead of these general output rules.
 
 ## 4. Special Triggers & Workflows
 
@@ -50,6 +64,16 @@
 * **Action**: Write down the prompts without executing them.
 * **Storage Path**: `~/dragon_project/docs/prompts/`.
 * **Outputs**: Generate two separate files: `YYYY-MM-DD_<summary_cn>.md` and `YYYY-MM-DD_<summary_en>.md`.
+
+### Trigger C: B/C and p/He Comparison / Fitting
+
+* **B/C**: When the user requests B/C or BC ratio comparison / fitting (e.g., "对比BC ratio" or "BC fitting"), directly call `python3 /home/ljiayi/dragon_project/dragon_utils/plotting/BCfitting.py [source]`.
+  * Function: Sum boron and carbon isotope fluxes from DRAGON/DRAGON2 ASCII output, compare B/C with AMS-02, and plot B/C, Model/Data, and fractional residuals. This is a diagnostic comparison of unmodulated model LIS with observed TOA data.
+* **p/He**: When the user requests proton/helium or pHe comparison / fitting (e.g., "pHe对比" or "pHe fitting"), directly call `python3 /home/ljiayi/dragon_project/dragon_utils/plotting/pHefitting.py [source]`.
+  * Function: Apply the existing fixed solar modulation, compare proton and total helium (He-3 + He-4) TOA spectra and the equal-rigidity p/He ratio with AMS-02, and report raw chi-square for proton and helium separately; no p/He ratio chi-square is calculated.
+* **Input**: `[source]` is an optional `.txt` spectrum path or directory. Prefer the user-specified or current-task spectrum; when omitted, both scripts select the latest `.txt` in `/home/ljiayi/dragon_project/data/dragon_output/`. Report the actual input file used.
+* **Scope**: Reuse these existing scripts for comparison; neither script performs automatic parameter optimization.
+* **Plot Files**: Both scripts save in `/home/ljiayi/dragon_project/outputs/figures/`. After running, rename only the newly generated plot to `<task>_YYYY-MM-DD.png` using the Asia/Tokyo date, following the plot rule in Section 3.
 
 ## 5. Research Goal: Reference Only
 
