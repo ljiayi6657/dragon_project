@@ -17,7 +17,7 @@ HOST = "ljiayi@192.168.72.54"
 SSH = ("ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
 
 
-def run_command(args, log, cwd=None):
+def run_command(args, log, cwd=None, capture=False):
     """Run one command, recording stdout, stderr and its exit status."""
 
     args = [str(part) for part in args]
@@ -32,10 +32,13 @@ def run_command(args, log, cwd=None):
                 args,
                 cwd=cwd,
                 stdin=subprocess.DEVNULL,
-                stdout=stream,
+                stdout=subprocess.PIPE if capture else stream,
                 stderr=subprocess.STDOUT,
                 check=False,
+                text=capture,
             )
+            if capture:
+                stream.write(done.stdout)
         except OSError as exc:
             stream.write(f"\nLaunch failed: {exc}\n")
             raise
@@ -46,13 +49,13 @@ def run_command(args, log, cwd=None):
     return done
 
 
-def execute(args, log, cwd=None, host=HOST):
+def execute(args, log, cwd=None, host=HOST, capture=False):
     """Execute one quoted argument list on the companion host."""
 
     command = shlex.join(str(part) for part in args)
     if cwd is not None:
         command = f"cd -- {shlex.quote(str(cwd))} && {command}"
-    return run_command([*SSH, host, command], log)
+    return run_command([*SSH, host, command], log, capture=capture)
 
 
 def upload(local, remote, log, host=HOST):

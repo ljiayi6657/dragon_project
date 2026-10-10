@@ -154,7 +154,7 @@ def rigidity(energy, flux, points, mode, phi, parts=None):
     return total
 
 
-def plot_flux(energy, flux):
+def plot_flux(energy, flux, output=None):
     fig, axes = plt.subplots(3, 1, figsize=(8, 10))
     results = {}
     limits = []
@@ -232,6 +232,10 @@ def plot_flux(energy, flux):
     axes[2].set_xscale("log")
     axes[2].legend()
     fig.tight_layout()
+    if output is not None:
+        target = Path(output).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(target, dpi=150)
     return fig, results, toa
 
 
@@ -239,6 +243,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dragon", nargs="?", default=DRAGON_OUT,
                         help="DRAGON2 output directory or a .txt spectrum")
+    parser.add_argument("--output", help="Exact figure path")
     args = parser.parse_args()
     try:
         for phi in (PHI_P, PHI_HE):
@@ -248,12 +253,10 @@ def main():
         print("Units: LIS energy GeV/n; flux cm^-2 s^-1 sr^-1 (GeV/n)^-1.")
         print("AMS comparisons: rigidity GV; flux cm^-2 s^-1 sr^-1 GV^-1.")
         print("Fixed project potentials; diagonal errors; bin-center evaluation.")
-        fig, results, toa = plot_flux(energy, flux)
-        output = Path(OUTPUT_DIR).expanduser().resolve()
-        output.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%y-%m-%d-%H%M")
-        target = output / f"pHeratio_{stamp}.png"
-        fig.savefig(target, dpi=150)
+        target = (Path(args.output).expanduser().resolve() if args.output
+                  else Path(OUTPUT_DIR).resolve() / f"pHeratio_{stamp}.png")
+        fig, results, toa = plot_flux(energy, flux, output=target)
         plt.close(fig)
     except (ValueError, OSError) as exc:
         plt.close("all")

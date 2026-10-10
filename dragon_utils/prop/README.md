@@ -1,8 +1,8 @@
 # DRAGON propagation optimization tools
 
-本目录保存了一组围绕 DRAGON/DRAGON2 传播模型拟合结果构建的优化、代理模型、可视化和太阳调制工具。代码主要读取 `fitspectra` 生成的 pickle 数据，整理为参数表和损失表，再使用梯度下降、贝叶斯优化、Markov Chain 或神经网络提出新的模拟参数。
+本目录保存了一组围绕 DRAGON/DRAGON2 传播模型拟合结果构建的优化、代理模型、可视化和太阳调制工具。历史代码主要读取 `fitspectra` 生成的 pickle 数据，整理为参数表和损失表，再使用梯度下降、贝叶斯优化、Markov Chain 或神经网络提出新的模拟参数。
 
-> 审查日期：2026-08-24。本文档基于当前目录中的 15 个 Python 文件、10 个 Jupyter Notebook、配置与启动脚本整理。`HelModArchives/`、`NN_data/`、模型文件和图像等大型数据资产只按结构检查，没有逐个解析二进制内容。
+> 原审查日期：2026-08-24；2026-10-10 已重新核查入口并补充各目录 README。本文档基于当前目录中的 15 个 Python 文件、10 个 Jupyter Notebook、配置与启动脚本整理。`HelModArchives/`、`NN_data/`、模型文件和图像等大型数据资产只按结构检查，没有逐个解析二进制内容。
 
 ## 目录概览
 
@@ -47,98 +47,13 @@
 
 输入 pickle 采用位置敏感的长元组格式，并且不同脚本期望的字段数量和顺序并不完全一致。必须使用与脚本版本匹配的 `fitspectra` 输出；不匹配时可能在解包阶段直接失败，或更危险地发生字段错位。
 
-## 各模块说明
+## 子目录入口
 
-### `common/`
-
-`datafunc.py` 提供当前最接近共享实现的数据入口，包括：
-
-- 运行外部 `fitspectra` 并处理交互提示；
-- 将模拟字典和选定损失转换为 DataFrame；
-- 合并插值点并计算插值权重；
-- 处理 NaN、无穷值和失败模拟；
-- 固定参数筛选、标准化、最佳点选择及距离/指数权重。
-
-`plotPS.py` 读取 `common/config.yaml`，生成参数空间配对图和损失—距离图。
-
-### `GradientDescent/`
-
-`GD.py` 的主循环会拟合局部或全局 Ridge 代理模型，然后通过数值或解析梯度生成下一参数点。支持：
-
-- Polynomial 或 Spline 特征；
-- Manual 或 Hyperopt 自动选择超参数；
-- Normal、Nesterov 或自动步长；
-- Exponential、Distance 或无额外权重；
-- 失败模拟后的半步回退；
-- 继续历史运行与自动重启。
-
-`submitGD.py` 用参数网格生成多组配置，并把任务分配到多个 IP。`plot_descentData.py` 和 `plotPS.py` 用于运行轨迹与参数空间检查。
-
-注意：`plot_descentData.py` 包含移动和递归删除历史目录的逻辑。运行前应备份数据并确认 `progress_dir` 指向正确目录。
-
-### `BayesianOptimization/`
-
-`BayesOpt.py` 读取历史模拟，在最佳点附近确定边界，然后使用 Gaussian Process 和 Expected Improvement 提出新点。每次目标函数调用都会提交模拟、等待拟合结果并更新 `data.pkl`。
-
-`plot_progress.py` 读取保存的 `points`、`losses`、`bounds`、`init_X` 和 `init_y`，绘制搜索轨迹与损失曲线。
-
-### `MarkovChain/`
-
-`MC.py` 从最佳点、较远优质点或指定哈希开始随机步进。较差点是否接受由损失比、距离条件和随机数共同决定。启用 `NN_assist` 时，会训练 TensorFlow 代理模型并从随机候选中选取预测损失最低的点。
-
-当前实现存在以下恢复、持久化和绘图问题：
-
-- `MC.py` 调用了未定义的 `load_previous_descentData`，因此 `load_previous: true` 路径不可直接使用。
-- `MC.py` 虽定义了 `save_current_data`，但主循环没有调用它，当前运行不会按该函数的格式持续写入搜索进度。
-- `MarkovChain/plot_progress.py` 与 `BayesianOptimization/plot_progress.py` 内容完全相同，仍读取 BayesianOptimization 配置，并假定存在 Markov Chain 当前保存格式没有稳定提供的 `bounds`、`init_X` 和 `init_y`。
-
-`MarkovChain/neural.py` 与 `neural/neuralscan.py` 当前字节级完全相同，属于重复副本。
-
-### `neural/`
-
-`neuraltest.py` 同时包含两类任务：
-
-- 从参数预测似然；
-- 从能谱及谱指数特征反推传播参数。
-
-它还包含多次训练、残差分布绘图、模型复用检查以及大规模随机候选搜索。`neuralscan.py` 是较早的自动训练—提点—提交循环。根目录的 `neuraltest.py` 则是更早的 TensorFlow 原型和示例集合，使用相对数据路径，不应与 `neural/neuraltest.py` 混淆。
-
-### Notebooks
-
-- `GeneralOverview/0_CreateDatasets.ipynb`：数据质量、相关性、分布、异常值和训练/验证/测试切分。
-- `MLModelFits/0_CreateDatasets.ipynb`：构造原始、变换后及去异常值数据集。
-- `MLModelFits/1_PolynomialRegression.ipynb`：Linear、Ridge、Lasso、ElasticNet 和多项式特征。
-- `MLModelFits/2_RandomForest.ipynb`：Random Forest 网格搜索与有/无异常值比较。
-- `MLModelFits/3_XGBoostDT.ipynb`：XGBoost 多输出策略、GridSearchCV 与 BayesSearchCV。
-- `MLModelFits/4_NeuralNetwork.ipynb`：PyTorch 全连接网络训练。
-- `MLModelFits/5_BayesianSearch.ipynb`：基于已有代理模型的参数贝叶斯搜索实验。
-- `MLModelFits/6_GDSearch.ipynb`：将 sklearn Ridge 模型转换为 PyTorch 计算图并优化输入参数。
-- `ComparisonPlots/`：多次运行的损失曲线对比和二维插值热图。
-
-### `helmod/`
-
-`HelMod_OfflineModule.py` 是 HelMod 4.1 离线模块，可作为库或命令行脚本使用。它可以：
-
-- 读取 GALPROP FITS 或两列 TXT 的本地星际谱（LIS）；
-- 在动能/核子与刚度之间转换；
-- 按核素加载并合并主、次级成分；
-- 读取 `HelModArchives/` 中的 `RawMatrixFile.npz`；
-- 计算太阳调制后能谱并与归档实验数据作图。
-
-基础命令形式为：
-
-```bash
-python helmod/HelMod_OfflineModule.py \
-  --ArchivePATH helmod/HelModArchives/<archive> \
-  --LIS <galprop.fits.gz-or-spectrum.txt> \
-  --SimName <experiment-key>
-```
-
-可通过 `-h` 查看 `--txtFile`、`--ParametersSet`、`--SumAllIsotpes`、`--PrintLIS`、`--SimUnit` 和 `--MakePlot` 等选项。
+各目录直属文件的用途、接口、调用和限制见相应子目录唯一 README。BayesianOptimization 当前 main 是本机 Task 2 的 1–2 轮接口，使用 skopt.Optimizer；历史 gp_minimize/常驻任务说明不再适用于该入口。其他优化循环仍保留旧外部提交依赖。
 
 ## 环境与运行前检查
 
-建议使用 Python 3.10。目录内已有 `.venv/`，但它占用约 11 GB，而且启动脚本固定激活 `/home/motz/CALETana/prop/.venv`，并不指向当前目录。
+建议使用 Python 3.10。目录内已有 `.venv/`，但它占用约 11 GB，GradientDescent/MarkovChain 启动脚本仍固定激活 `/home/motz/CALETana/prop/.venv`；当前 start_BayesOpt.sh 使用项目根目录与 ~/.cache/dragon-task2deps。
 
 ```bash
 cd /home/ljiayi/dragon_project/dragon_utils/prop
@@ -163,11 +78,11 @@ pip install -r requirements.txt
 4. 从相应子目录启动脚本，因为部分导入和相对路径依赖当前工作目录。
 5. 不要在不了解内容时加载不可信 pickle；pickle 反序列化可执行任意代码。
 
-典型入口如下，但不建议在未修正配置路径前直接执行：
+历史配置修正后的典型入口如下；当前 BayesOpt 接口以其子目录 README 为准：
 
 ```bash
 cd GradientDescent && python GD.py
-cd BayesianOptimization && python BayesOpt.py
+python BayesianOptimization/BayesOpt.py --check
 cd MarkovChain && python MC.py
 cd neural && python neuraltest.py
 ```
@@ -223,8 +138,26 @@ cd neural && python neuraltest.py
 - `MarkovChain/neural.py` 与 `neural/neuralscan.py` 完全重复；两个 `plot_progress.py` 也完全重复。
 - 多处使用 `shell=True`、字符串拼接命令和直接改写外部脚本，输入路径和参数必须视为可信。
 - 多个等待循环一次等待 300 秒，外部程序没有产生预期提示时还可能进入更长的重试周期。
-- 当前 15 个 Python 源文件均可被 Python AST 解析；HelMod 中有三处正则字符串触发无效转义 `SyntaxWarning`，但不是语法错误。
+- 原审查中的 Python 源文件均可被 Python AST 解析；HelMod 中有三处正则字符串触发无效转义 `SyntaxWarning`，但不是语法错误。
 
 ## 本次审查范围
 
-本次只新增此 README，没有修改任何 Python、Shell、YAML、Notebook、数据、模型或历史输出文件，也没有执行 DRAGON、DRAGON2、`fitspectra`、优化器或 HelMod 模拟。
+2026-10-10 此 prop 子树只更新/新增文档，未修改或运行其 Python、Shell、YAML、Notebook、模型与优化循环。当前 companion 实现与构建验证在项目其他目录独立进行。
+
+
+## neuraltest.py
+
+旧 TensorFlow 训练/参数空间原型，含 chisquarepredict/reeval/getrandommodel 和多个示例。
+
+输入输出与限制：输入旧 ../../astro/CALplots/ pickle，输出模型/预测/保存结果；没有稳定 CLI，数据与训练参数硬编码，导入也打印 TensorFlow 版本。实验代码，非 companion 入口。
+
+示例（历史/实验代码须先修正依赖与路径，不在本任务中执行）：
+
+```bash
+cd /home/ljiayi/dragon_project/dragon_utils/prop
+python3 neuraltest.py
+```
+
+主要接口：`main`, `chisquarepredict`, `reeval`, `getrandommodel`, `example3`, `example2`, `example1`, `dataframe_to_dataset`, `encode_numerical_feature`, `encode_categorical_feature` 等（完整签名见源码）。
+
+实际导入：`datetime`, `glob`, `math`, `numpy`, `os`, `pandas`, `pickle`, `pickle5`, `random`, `sklearn`, `sys`, `tensorflow`, `time`。

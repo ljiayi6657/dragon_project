@@ -89,7 +89,7 @@ def load_ams(path):
     return energy, data[:, 2], error
 
 
-def plot_bc(energy, model, obsx, obs, error, output):
+def plot_bc(energy, model, obsx, obs, error, output=None):
     keep = (obsx >= energy[0]) & (obsx <= energy[-1])
     skipped = np.count_nonzero(~keep)
     if skipped:
@@ -121,11 +121,14 @@ def plot_bc(energy, model, obsx, obs, error, output):
     axes[2].set_xscale("log")
     plt.tight_layout()
 
-    output.mkdir(parents=True, exist_ok=True)
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
     stamp = now.strftime("%Y-%m-%d")
     time = now.strftime("%H%M")
-    target = output / f"{stamp}_BCratio-{time}.png"
+    target = (Path(output).expanduser().resolve() if output is not None
+              else Path(OUTPUT_DIR) / f"{stamp}_BCratio-{time}.png")
+    if target.is_dir() or not target.suffix:
+        target = target / f"{stamp}_BCratio-{time}.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(target, dpi=150)
     plt.close(fig)
     return target
@@ -135,12 +138,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dragon", nargs="?", default=DRAGON_OUT,
                         help="DRAGON2 output directory or a .txt spectrum")
+    parser.add_argument("--output", help="Exact figure path")
     args = parser.parse_args()
     try:
         path, energy, model = load_model(args.dragon)
         obsx, obs, error = load_ams(AMS_DATA)
-        target = plot_bc(energy, model, obsx, obs, error, Path(OUTPUT_DIR))
-    except ValueError as exc:
+        target = plot_bc(energy, model, obsx, obs, error, args.output)
+    except (ValueError, OSError) as exc:
         parser.exit(1, f"Error: {exc}\n")
     print(f"DRAGON2 spectrum: {path}")
     print("Note: DRAGON2 LIS is compared with AMS-02 TOA; this is diagnostic only.")
