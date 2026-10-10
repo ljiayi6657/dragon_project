@@ -34,19 +34,21 @@
 * **SSH Address**: `ljiayi@192.168.72.54`; connect with `ssh ljiayi@192.168.72.54`.
 * 用户提到在 **companion** 上执行任务时，指通过 SSH 连接上述实验室内网主机进行计算。
 * 默认在本机准备和检查 XML，在 companion 上运行 DRAGON2，将本轮结果及全部运行日志同步回本机
+* **计算线程**：companion 当前构建为 48 个 OpenMP 线程。配置同时使用 `--with-numcpu=48` 与 `CPPFLAGS=-I<prefix>/include -DNUMTHREADS=48`，生成的 `NUMTHREADS`、`OMP_NUM_THREADS` 宏均为 48。修改计算线程数需在无运行中模型时重新配置、编译；不自动终止既有计算。`make -j4` 仅控制编译并行度。主机有 24 个物理核心、48 个逻辑 CPU。
+* **构建记录**：当前版本见 `outputs/workflow/2026-10-10_threads48.json`，完整构建/验证日志在 `logs/`；`2026-10-10_threads.json`、`2026-10-10_build.json` 分别保留历史 24、4 线程构建记录。24 线程运行记录另存 `outputs/workflow/2026-10-10_cpu24.json`，同一 XML 的 24/48 线程原生耗时比较见 `2026-10-10_speed.json`，不覆盖历史源码/程序哈希。
 
 
 ## 3. Execution & Logging Rules
 
 * **Dragon/Dragon2 Logs**: Every time `dragon` or `dragon2` is executed, copy all output logs into `~/dragon_project/logs/`.
   * Naming format: `YYYY-MM-DD_HH-MM-SS.md`.
-  * companion 每次新计算启动后，在 muon 自动创建 `dragon_log` tmux 会话；已有会话时新增本轮窗口，用 SSH `tail -n 60 -F` 查看精确远端日志。查看失败只警告，不取消模型；`--preview`、`fetch`、`plot` 不创建新窗口。
+  * companion 每次新计算启动后，在 muon 自动创建 `dragon_log` tmux 会话；已有会话时新增本轮窗口，用 SSH `tail -n 60 -F` 查看精确远端日志，并按窗口编号自动切换本会话到新日志。已连接该会话的终端无需重新输入命令或手动切换，旧窗口保留、其他会话不切换；首次进入仍用 `tmux attach -t dragon_log`。查看或切换失败只警告，不取消模型；`--preview`、`fetch`、`plot` 不创建或切换日志窗口。
   * 运算结束并取回日志后，`run`、`fetch` 在脚本终端各打印一次 DRAGON 原生的 `Solution found in ... s.` 文本，并记录 `duration`；禁止用 Python 或开始/结束时间差替代该耗时。原生耗时行缺失时如实报告，不编造。
 * **DRAGON/DRAGON2 XML Parameters**:
   * All XML parameter files used, created, or stored by any task for DRAGON/DRAGON2 calculations must be kept in `/home/ljiayi/dragon_project/data/processed/`.
   * companion 单轮输入、原始模拟数据及状态记录统一主体 `YYYY-MM-DD_dimZ<N>`，不按图的种类分类，不接收 `--task`；N 是 XML 的实际整数 DimZ。XML 与 `.source.param` 同目录同主体，源丰度缺失必须报错，不替换模板。
   * 两张图片仍使用下述 BCratio/pHe 名称，允许图片主体中的两个下划线，覆盖旧单下划线限制；其他新变量、函数及文件名仍遵守原限制。
-  * Asia/Tokyo 日期在每轮启动时固定，跨午夜不变。同日同 DimZ 使用统一状态与锁，默认拒绝覆盖，只有用户主动给 `--overwrite` 才替换本轮对应文件，不静默增加 UUID 或额外时间戳。历史 BCratio/pHe 主体仍可用于 `fetch`、`plot`，不自动改名或重算。
+  * Asia/Tokyo 日期在每轮启动时固定，跨午夜不变。同日同 DimZ 使用统一状态与锁，重新运行直接覆盖对应的输入副本、状态、数据和图片；`fetch`、`plot` 同样直接替换对应文件，无需 `--overwrite`（旧参数仅作兼容）。仍拒绝并发提交以及覆盖 `prepared/launching/running/finalizing/unknown` 远端任务，日志每轮独立保留。不静默增加 UUID 或额外时间戳。历史 BCratio/pHe 主体仍可用于 `fetch`、`plot`，不自动改名或重算。
   * 原始 ASCII/fullstore FITS 归档到 `data/dragon_output/<stem>.txt` / `<stem>.fits.gz`；partialstore 原生 `<stem>_spectrum.fits.gz` 映射为 `<stem>-spectrum.fits.gz`，记录原始与归档名称。派生文件用简洁连字符后缀，区分空间分布与太阳位置谱。
   * ASCII 与 XML 开启的 fullstore/partialstore FITS 同轮生成、核验并回传；入口完成后明确打印所有已回传原始数据的本机路径。DRAGON 只打印 ASCII 写入提示不代表 FITS 缺失；入口不自动修改 XML 输出开关。
 * **Generated Plots**:
@@ -82,7 +84,7 @@
 * **Input**: `[source]` is an optional `.txt` spectrum path or directory. Prefer the user-specified or current-task spectrum; when omitted, both scripts select the latest `.txt` in `/home/ljiayi/dragon_project/data/dragon_output/`. Report the actual input file used.
 * **Scope**: Reuse these existing scripts for comparison; neither script performs automatic parameter optimization.
 * **Plot Files**: 两脚本支持 `[source] --output /absolute/path/figure.png`。优先在调用时指定 Section 3 的精确图片路径，避免默认分钟名称碰撞，不在执行后猜测或选择最新图片。companion 入口始终传入本轮确切 TXT 和两张规范图片路径。
-* **Single Round**: 用户先手动检查 XML，再执行 `python3 /home/ljiayi/dragon_project/scripts/run_companion.py run /absolute/path/model.xml`；一次调用只模拟一遍并自动输出 BCratio、pHe 两张图。用 `--preview` 无写入预览，`fetch YYYY-MM-DD_dimZ<N>` 只查询/取回，`plot YYYY-MM-DD_dimZ<N> --overwrite` 只重做两张图。用户没有选择实际 XML 时只实现、构建和无模拟验证，不自行运行历史模型。
+* **Single Round**: 用户先手动检查 XML，再执行 `python3 /home/ljiayi/dragon_project/scripts/run_companion.py run /absolute/path/model.xml`；一次调用只模拟一遍并自动输出 BCratio、pHe 两张图。用 `--preview` 无写入预览，`fetch YYYY-MM-DD_dimZ<N>` 只查询/取回，`plot YYYY-MM-DD_dimZ<N>` 只重做两张图。用户没有选择实际 XML 时只实现、构建和无模拟验证，不自行运行历史模型。
 * **Completion**: 按真实进程退出码、XML 输出清单及哈希判定，失败也同步日志；断线先查状态，禁止盲目重跑，不以文件出现/大小稳定作为成功。均匀网格才记录 `2L/(DimZ-1)`，非均匀网格单独识别。固定 L 及物理参数，由用户选择 DimZ；实验 χ² 的改善不能替代网格收敛验证。
 
 ## 5. Research Goal: Reference Only
@@ -98,7 +100,7 @@ Read and apply this section **only when the user explicitly mentions this resear
 
 | 路径 | 用途及推荐调用 | 范围 |
 | --- | --- | --- |
-| `scripts/run_companion.py` | `python3 scripts/run_companion.py run <xml> [--preview]`；`fetch <stem>`、`plot <stem>`，主体 `YYYY-MM-DD_dimZ<N>`；日志查看 `tmux attach -t dragon_log` | 推荐 companion 单轮入口；一次模拟、两张图、XML 开启的 FITS；自动日志窗口和原生耗时；不自动编辑参数/搜索/排队 |
+| `scripts/run_companion.py` | `python3 scripts/run_companion.py run <xml> [--preview]`；`fetch <stem>`、`plot <stem>`，主体 `YYYY-MM-DD_dimZ<N>`；首次日志查看 `tmux attach -t dragon_log`，已连接时自动切换新日志 | 推荐 companion 单轮入口；一次模拟、两张图、XML 开启的 FITS；自动日志窗口、切换和原生耗时；不自动编辑参数/搜索/排队 |
 | `dragon_utils/companion.py` | `from dragon_utils.companion import run_command, execute, upload, download`；参数列表、log、可选 host；前两函数可 `capture=True` | SSH/rsync、合并 stdout/stderr 与真实退出码；不调度模型 |
 | `scripts/xml_batch.py` | `from scripts.xml_batch import ModelSpec, prepare_models, file_hash, copy_baseline, save_state` | 本机手动准备输入和记录；库模块，无 CLI |
 | `dragon_utils/xml_manager/xml_modifier.py` | `load_xml/get_param` 只读；`modify_xml(template, params, output, diff)` 编辑 | 推荐 XML 接口；运行入口只读，物理参数编辑在用户检查之前 |

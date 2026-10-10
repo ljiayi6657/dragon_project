@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from dragon_utils import companion
 from dragon_utils.xml_manager.xml_modifier import load_xml, get_param, find_one, calc_dz
-from scripts.xml_batch import file_hash, check_new, copy_baseline, save_state
+from scripts.xml_batch import file_hash, copy_baseline, save_state
 
 BASE = Path("/home/ljiayi/dragon_project")
 PROGRAM = Path("/home/ljiayi/dragon/DRAGON2-Beta_version-master")
@@ -45,9 +45,6 @@ if op == 'reserve':
     directory = pathlib.Path(spec['program']) / 'output'
     names = [spec['stem'] + suffix for suffix in ('.txt', '.fits', '.fits.gz', '_spectrum.fits', '_spectrum.fits.gz')]
     history = [str(directory / name) for name in names if (directory / name).exists()]
-    inputs = [item['remote'] for item in spec['inputs'] if pathlib.Path(item['remote']).exists()]
-    if (state or history or inputs) and not request['overwrite']:
-        raise FileExistsError('Remote task/input/output already exists; explicit --overwrite required')
     pathlib.Path(spec['remoteLog']).parent.mkdir(parents=True, exist_ok=True)
     with open(spec['remoteLog'], 'x') as stream:
         stream.write('# Companion single run\n')
@@ -298,7 +295,7 @@ def validate_fits(path):
                 raise ValueError(f"Empty particle FITS HDU: {path}")
 
 
-def pull(state, log, overwrite=False):
+def pull(state, log):
     """Retrieve only successful manifest files; keep failure logs too."""
     remote_log = state.get("remoteLog")
     if remote_log:
@@ -322,9 +319,6 @@ def pull(state, log, overwrite=False):
     if [(item["native"], item["archive"]) for item in outputs] != [(item["native"], item["archive"]) for item in state["expected"]]:
         raise ValueError("Remote output manifest differs from submitted XML")
     folder = BASE / "data/dragon_output"
-    for item in outputs:
-        target = folder / item["archive"]
-        check_new(target, overwrite)
     folder.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="companion-", dir=BASE / "outputs/workflow") as temp:
         for item in outputs:
@@ -344,7 +338,7 @@ def pull(state, log, overwrite=False):
     state["localStatus"] = "retrieved"
 
 
-def draw(state, log, overwrite=False):
+def draw(state, log):
     """Plot both diagnostics from this round's exact verified spectrum."""
     if state.get("localStatus") not in {"retrieved", "plotted", "plotFailed"}:
         raise ValueError("Retrieve and validate the successful task before plotting")
@@ -352,8 +346,6 @@ def draw(state, log, overwrite=False):
         if file_hash(item["local"]) != item["sha256"]:
             raise ValueError(f"Archived data changed: {item['local']}")
     spectrum = next(item["local"] for item in state["outputs"] if item["kind"] == "ascii")
-    for path in state["figures"].values():
-        check_new(path, overwrite)
     state["plots"] = {}
     try:
         for name, script in (("BCratio", "BCfitting.py"), ("pHe", "pHefitting.py")):
@@ -376,27 +368,19 @@ def draw(state, log, overwrite=False):
         raise
 
 
-def run(args, log, state):
+def run(log, state):
     """Submit exactly one round, then wait and retrieve its completed outputs."""
     target = BASE / "outputs/workflow" / (state["stem"] + ".json")
-    check_new(target, args.overwrite)
-    for item in state["inputs"]:
-        if item["original"] != item["local"]:
-            check_new(item["local"], args.overwrite)
-    for item in state["expected"]:
-        check_new(BASE / "data/dragon_output" / item["archive"], args.overwrite)
-    for path in state["figures"].values():
-        check_new(path, args.overwrite)
     state.update(token=file_hash(log) + datetime.now(TOKYO).isoformat(), remoteLog=str(new_log()),
                  localLog=str(log), status="preparing")
     reserved = False
     try:
-        rpc("reserve", state["stem"], log, spec=state, overwrite=args.overwrite)
+        rpc("reserve", state["stem"], log, spec=state)
         reserved = True
         save_state(target, state)
         for item in state["inputs"]:
             if item["original"] != item["local"]:
-                copy_baseline(item["original"], item["local"], args.overwrite)
+                copy_baseline(item["original"], item["local"], overwrite=True)
             if file_hash(item["local"]) != item["sha256"]:
                 raise ValueError("Input changed during preparation")
             companion.upload(item["local"], item["remote"], log)
@@ -413,7 +397,8 @@ def run(args, log, state):
                 viewer = companion.run_command(["tmux", "new-window", "-d", "-t", "=dragon_log:", "-n", state["stem"],
                                                 "-P", "-F", display, view], log, capture=True)
             state["monitor"] = viewer.stdout.strip()
-            print(f"Log viewer: {state['monitor']}; attach with: tmux attach -t dragon_log", flush=True)
+            companion.run_command(["tmux", "select-window", "-t", "=" + state["monitor"].rsplit(".", 1)[0]], log)
+            print(f"Log viewer: {state['monitor']} (selected automatically); attach if needed: tmux attach -t dragon_log", flush=True)
         except (OSError, RuntimeError) as exc:
             state["monitorError"] = str(exc)
             print(f"Warning: log viewer unavailable: {exc}; remote calculation is retained", file=sys.stderr, flush=True)
@@ -423,9 +408,9 @@ def run(args, log, state):
             time.sleep(20)
             state.update(rpc("status", state["stem"], log))
             save_state(target, state)
-        pull(state, log, args.overwrite)
+        pull(state, log)
         save_state(target, state)
-        draw(state, log, args.overwrite)
+        draw(state, log)
     except BaseException as exc:
         state["localError"] = str(exc)
         if reserved:
@@ -455,7 +440,7 @@ def main():
         entry = commands.add_parser(mode, help="Retrieve remote status/results" if mode == "fetch" else "Remake local figures")
         entry.add_argument("stem", help="Exact YYYY-MM-DD_dimZN round stem; legacy stems also accepted")
     for entry in (submit, commands.choices["fetch"], commands.choices["plot"]):
-        entry.add_argument("--overwrite", action="store_true", help="Explicitly replace this round's existing files")
+        entry.add_argument("--overwrite", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
         if args.mode == "run" and args.preview:
@@ -472,7 +457,7 @@ def main():
             log = new_log()
             target = folder / (stem + ".json")
             if args.mode == "run":
-                state = run(args, log, plan)
+                state = run(log, plan)
             else:
                 state = json.loads(target.read_text()) if target.exists() else {}
                 try:
@@ -481,9 +466,9 @@ def main():
                         if state.get("token") and state["token"] != remote["token"]:
                             raise ValueError("Remote task was replaced; local token differs")
                         state.update(remote)
-                        pull(state, log, args.overwrite)
+                        pull(state, log)
                     else:
-                        draw(state, log, args.overwrite)
+                        draw(state, log)
                 except BaseException as exc:
                     state["localError"] = str(exc)
                     raise

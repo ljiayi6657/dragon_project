@@ -10,12 +10,12 @@
 python3 scripts/run_companion.py run /absolute/path/model.xml --preview
 python3 scripts/run_companion.py run /absolute/path/model.xml
 python3 scripts/run_companion.py fetch 2026-10-10_dimZ81
-python3 scripts/run_companion.py plot 2026-10-10_dimZ81 --overwrite
+python3 scripts/run_companion.py plot 2026-10-10_dimZ81
 ```
 
 示例 `model.xml` 必须是用户实际选择的文件，并有同目录同主体的 `model.source.param`；不自动使用丰度模板。示例 stem 的日期与 DimZ 应替换为该轮记录的值。`fetch` 只查询状态、下载日志，并在远端成功退出后取回结果；然后用 `plot` 作图。它不启动模拟。`plot` 不使用 SSH，只读取已成功取回且哈希未变的本轮数据。
 
-每次成功启动新计算后，入口在 muon 自动创建后台 tmux 会话 `dragon_log`，执行 SSH `tail -n 60 -F` 查看本轮精确的远端运行日志。已有该会话时新增以本轮主体命名的窗口，保留其他日志窗口。使用 `tmux attach -t dragon_log` 查看，`Ctrl+b` 后按 `w` 选择窗口，`Ctrl+b` 后按 `d` 脱离；不切换主脚本终端。日志查看连接或 tmux 创建失败只警告，不取消计算。窗口持续跟随日志，任务结束后可用 `Ctrl+C` 结束查看，不影响计算或主脚本。预览、`fetch`、`plot` 不创建日志窗口。
+每次成功启动新计算后，入口在 muon 自动创建后台 tmux 会话 `dragon_log`，执行 SSH `tail -n 60 -F` 查看本轮精确的远端运行日志。已有该会话时新增以本轮主体命名的窗口，保留其他日志窗口，并通过精确窗口编号自动切换到本轮窗口。终端已经连接 `dragon_log` 时会直接显示新日志，无需重新输入命令或手动切换；其他 tmux 会话不切换。首次查看或脱离后重新进入仍使用 `tmux attach -t dragon_log`，保持该终端打开，在另一个终端启动下一轮即可。`Ctrl+b` 后按 `w` 可回看旧窗口，`Ctrl+b` 后按 `d` 脱离。日志查看创建或自动切换失败只警告，不取消计算。窗口持续跟随日志，任务结束后可用 `Ctrl+C` 结束查看，不影响计算或主脚本。预览、`fetch`、`plot` 不创建或切换日志窗口。
 
 远端运算完成并取回运行日志后，`run`、`fetch` 每次调用在脚本终端打印一次 DRAGON 自己的 `Solution found in ... s.` 原文，并将其保存在状态的 `duration` 字段；不使用 Python 计时或开始/结束时间差替代。如果成功运行日志缺少该行，只报告缺失；模型失败时不编造耗时。耗时行在取回数据和作图前显示，图片生成失败也不会丢失已打印的模型耗时。
 
@@ -37,17 +37,17 @@ python3 scripts/run_companion.py plot 2026-10-10_dimZ81 --overwrite
 
 ASCII 与 FITS 可以在同一轮同时生成和回传。XML 的 `<Output>` 下存在 `<fullstore/>` 时保存完整空间 FITS，存在 `<partialstore/>` 时保存太阳位置谱 FITS；两者都存在时，两份 FITS 与 TXT 一起核验、回传。入口按用户 XML 读取开关，不自动改 XML。DRAGON 原生末尾只打印 `Writing ASCII output file`，这不表示没有生成 FITS；入口完成后会明确列出 `ASCII`、`FITS fullstore`、`FITS partialstore` 的实际本机路径，随后列出两张图。
 
-同日同 DimZ 的已有输入副本、状态、数据或图片默认拒绝覆盖。原文件本身已是规范位置时直接读取，不重复复制。只有明确传入 `--overwrite` 才替换对应本轮文件；它仍不能覆盖或重启 `prepared/launching/running/finalizing/unknown` 远端任务。同日同 DimZ 使用统一状态与锁，重复或并发调用不能通过改变图的分类再提交一次。日志永不复用旧文件名。
+同日同 DimZ 再次运行时直接替换对应的输入副本、状态、数据和图片，无需 `--overwrite`；`fetch` 和 `plot` 也直接替换对应的数据和图片。原文件本身已是规范位置时直接读取，不重复复制。旧命令中的 `--overwrite` 仍接受，仅作兼容。统一状态与锁仍禁止并发提交，也不能覆盖或重启 `prepared/launching/running/finalizing/unknown` 远端任务。日志每轮独立命名并保留。
 
 远端固定地址 `ljiayi@192.168.72.54`，输入同本机 `data/processed/` 路径，程序目录 `/home/ljiayi/dragon/DRAGON2-Beta_version-master/`，从该目录调用 `DRAGON` 启动器。运行 worker 是通过 SSH 传入的标准库 Python 代码，不部署常驻队列或新的远端脚本。它脱离 SSH 会话，原子记录任务状态、PID/进程起始标识/主机 boot ID、输入及源码（含 cparamlib C 源文件）/程序/共享库 SHA256、开始结束时间、真实退出码、原生与归档文件对应关系。
 
-完成条件是进程退出码为零且 XML 开启的各输出非空。取回暂存文件后核对 SHA256 与长度，复用两个绘图 reader 检查 ASCII 列、能量轴与通量，并解析所有 FITS HDU、读取 gzip 至末尾检查完整性，然后归档。不根据文件出现或大小稳定判断成功。失败也取回可取得的完整运行日志；作图失败保留原始数据及 `plotFailed` 状态，可以 `plot --overwrite` 重做。图片先在 figures/ 直属临时 PNG 文件中生成，再替换正式路径并清理临时文件，不创建图片子目录。
+完成条件是进程退出码为零且 XML 开启的各输出非空。取回暂存文件后核对 SHA256 与长度，复用两个绘图 reader 检查 ASCII 列、能量轴与通量，并解析所有 FITS HDU、读取 gzip 至末尾检查完整性，然后归档。不根据文件出现或大小稳定判断成功。失败也取回可取得的完整运行日志；作图失败保留原始数据及 `plotFailed` 状态，可以 `plot <stem>` 重做。图片先在 figures/ 直属临时 PNG 文件中生成，再替换正式路径并清理临时文件，不创建图片子目录。
 
 SSH 中断或 Ctrl-C 后保留远端任务，使用同一 stem 的 `fetch` 检查，再决定下一步。远端仍在运行时 `fetch` 下载当前日志并非零退出，不拉模拟结果；稍后再次执行。worker 消失、重启或身份变化时标记 `unknown`，缺少完整退出记录时不会宣称成功。输入上传中断而还没有 launch 时尽力标记失败；若连接阻断导致 `prepared/launching/unknown` 残留，需 SSH 检查 JSON、日志与实际进程，人工确认终止状态后再考虑显式覆盖。入口不自动取消模型。
 
 依赖：本机 `ssh`、`rsync`、tmux、lxml、NumPy、SciPy、Matplotlib、Astropy，以及 `data/experiment_data/expdata/` 中现有 AMS 数据；远端 Python 3.9+、rsync、tail 和可运行 DRAGON2。库接口 `inspect_xml`、`make_plan`、`rpc`、`pull`、`draw` 供入口复用；复制、哈希、状态复用下方模块。两个诊断保留各自物理/统计口径，实验 χ² 改善不等于网格收敛。
 
-远端构建记录在 `outputs/workflow/2026-10-10_build.json` 和对应 `logs/`。依赖用 Ubuntu jammy 的 GSL/CFITSIO 包解包到 `/home/ljiayi/.local/dragon/usr/`，不需要 sudo。配置需给该 include、multiarch 库目录及 rpath，`--with-gsl-path=<prefix>/bin --with-cfitsio=<prefix> --with-numcpu=4`，链接参数还需 `-Wl,--disable-new-dtags -Wl,-rpath,<prefix>/lib/x86_64-linux-gnu`，让依赖的间接共享库也能解析；以及 `CPPFLAGS=-I<prefix>/include -DNUMTHREADS=4`；随后 `make clean`、`make -j4`。运行 worker 显式提供该依赖库目录和程序 `.libs` 路径。数值模型端到端验收需用户选择 XML。
+companion 当前构建为 **48 个计算线程**，记录在 `outputs/workflow/2026-10-10_threads48.json` 和对应 `logs/`；`2026-10-10_threads.json`、`2026-10-10_build.json` 分别保留历史 24、4 线程构建记录。主机有 24 个物理核心、48 个逻辑 CPU。依赖用 Ubuntu jammy 的 GSL/CFITSIO 包解包到 `/home/ljiayi/.local/dragon/usr/`，不需要 sudo。配置需给该 include、multiarch 库目录及 rpath，`--with-gsl-path=<prefix>/bin --with-cfitsio=<prefix> --with-numcpu=48`，链接参数还需 `-Wl,--disable-new-dtags -Wl,-rpath,<prefix>/lib/x86_64-linux-gnu`，让依赖的间接共享库也能解析；以及 `CPPFLAGS=-I<prefix>/include -DNUMTHREADS=48`；随后 `make clean`、`make -j4`。`make -j4` 只控制编译并行度，计算使用 48 线程。生成的 `config.h` 中 `NUMTHREADS` 与 `OMP_NUM_THREADS` 均为 48；求解器显式使用这些编译宏，改变计算线程数需重新编译。运行 worker 显式提供该依赖库目录和程序 `.libs` 路径。24 线程运行文件备份为远端 workflow 的 `2026-10-10_threads24.tar.gz`；历史 4 线程备份 `2026-10-10_threads-before.tar.gz` 仍保留。物理源码哈希、依赖、启动器及独立 OpenMP 48 线程组已验证。用户指定同一份 `2026-10-10_dimZ81.xml` 进行 24/48 线程比较；24 线程运行记录另存 `2026-10-10_cpu24.json`，DRAGON 原生耗时比较保存在 `2026-10-10_speed.json`。
 
 ## xml_batch.py
 

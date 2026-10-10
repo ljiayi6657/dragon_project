@@ -68,7 +68,7 @@ python3 dragon_utils/plotting/BCfitting.py data/dragon_output/2026-10-10_dimZ81.
 python3 dragon_utils/plotting/pHefitting.py data/dragon_output/2026-10-10_dimZ81.txt --output /home/ljiayi/dragon_project/outputs/figures/2026-10-10_pHe_dimZ81.png
 ```
 
-日期/DimZ 替换为实际该轮值。`scripts/run_companion.py run <xml>` 无需 `--task`，一次模拟自动生成两张图；`plot YYYY-MM-DD_dimZ<N>` 也会用同一份数据重做两张图。直接调用绘图脚本时，`--output` 本身允许覆盖；需要防碰撞、哈希绑定及恢复时使用单轮入口。依赖 Python 3.10+、NumPy、Matplotlib；pHe 还需 SciPy 及 `data_processing.physics/statistic_analysis`。输入数据和单位、调制、同位素求和、统计定义均保留上文口径；所有正式图片直接保存到项目 `outputs/figures/`。
+日期/DimZ 替换为实际该轮值。`scripts/run_companion.py run <xml>` 无需 `--task`，一次模拟自动生成两张图；`plot YYYY-MM-DD_dimZ<N>` 也会用同一份数据重做两张图。单轮入口与直接调用绘图脚本都允许覆盖同名图片，无需 `--overwrite`；单轮入口还提供并发锁、哈希绑定及恢复。依赖 Python 3.10+、NumPy、Matplotlib；pHe 还需 SciPy 及 `data_processing.physics/statistic_analysis`。输入数据和单位、调制、同位素求和、统计定义均保留上文口径；所有正式图片直接保存到项目 `outputs/figures/`。
 
 ## pHefitting27.py
 
