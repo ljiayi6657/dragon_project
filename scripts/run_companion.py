@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 import re
+import shlex
 import sys
 import tempfile
 import time
@@ -301,7 +302,20 @@ def pull(state, log, overwrite=False):
     """Retrieve only successful manifest files; keep failure logs too."""
     remote_log = state.get("remoteLog")
     if remote_log:
-        companion.download(remote_log, BASE / "logs" / Path(remote_log).name, log)
+        runtime = BASE / "logs" / Path(remote_log).name
+        companion.download(remote_log, runtime, log)
+        if state["status"] in {"succeeded", "failed"}:
+            duration = None
+            with runtime.open(encoding="utf-8", errors="replace") as stream:
+                for line in stream:
+                    text = line.rstrip("\r\n")
+                    if re.fullmatch(r"Solution found in .+ s\.", text):
+                        duration = text
+            if duration:
+                state["duration"] = duration
+                print(duration, flush=True)
+            elif state["status"] == "succeeded":
+                print(f"Warning: DRAGON duration line not found in {runtime}", file=sys.stderr, flush=True)
     if state["status"] != "succeeded" or state.get("exitcode") != 0:
         raise RuntimeError(f"Remote status: {state['status']}; {state.get('error', '')}. Use fetch to inspect again.")
     outputs = state.get("outputs", [])
@@ -388,10 +402,26 @@ def run(args, log, state):
             companion.upload(item["local"], item["remote"], log)
         state = rpc("launch", state["stem"], log, token=state["token"])
         save_state(target, state)
+        try:
+            view = shlex.join([*companion.SSH, companion.HOST,
+                               shlex.join(["tail", "-n", "60", "-F", "--", state["remoteLog"]])])
+            display = "#{session_name}:#{window_index}.#{pane_index}"
+            try:
+                viewer = companion.run_command(["tmux", "new-session", "-d", "-s", "dragon_log", "-n", state["stem"],
+                                                "-P", "-F", display, view], log, capture=True)
+            except RuntimeError:
+                viewer = companion.run_command(["tmux", "new-window", "-d", "-t", "=dragon_log:", "-n", state["stem"],
+                                                "-P", "-F", display, view], log, capture=True)
+            state["monitor"] = viewer.stdout.strip()
+            print(f"Log viewer: {state['monitor']}; attach with: tmux attach -t dragon_log", flush=True)
+        except (OSError, RuntimeError) as exc:
+            state["monitorError"] = str(exc)
+            print(f"Warning: log viewer unavailable: {exc}; remote calculation is retained", file=sys.stderr, flush=True)
+        save_state(target, state)
         while state["status"] in {"launching", "running", "finalizing"}:
             print(f"{state['stem']}: {state['status']}; fetch can resume after disconnect", flush=True)
             time.sleep(20)
-            state = rpc("status", state["stem"], log)
+            state.update(rpc("status", state["stem"], log))
             save_state(target, state)
         pull(state, log, args.overwrite)
         save_state(target, state)
@@ -461,6 +491,10 @@ def main():
                     if state:
                         save_state(target, state)
             print(f"Status: {state.get('localStatus', state['status'])}\nState: {target}\nLog: {log}")
+            labels = {"ascii": "ASCII", "spatial": "FITS fullstore", "solar": "FITS partialstore"}
+            for item in state.get("outputs", []):
+                if item.get("local"):
+                    print(f"{labels[item['kind']]}: {item['local']}")
             for item in state.get("plots", {}).values():
                 print(f"Figure: {item['path']}")
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
