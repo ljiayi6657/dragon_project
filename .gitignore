@@ -2,6 +2,11 @@
 logs/
 *.log
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
 # notes, promopts and summaries
 docs/
 
