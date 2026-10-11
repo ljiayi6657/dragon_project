@@ -103,6 +103,7 @@ Read and apply this section **only when the user explicitly mentions this resear
 | 路径 | 用途及推荐调用 | 范围 |
 | --- | --- | --- |
 | `scripts/run_companion.py` | `python3 scripts/run_companion.py run <xml> [--preview]`；缺少同名丰度表时使用固定默认表；`fetch <stem>`、`plot <stem>`，主体 `YYYY-MM-DD_dimZ<N>`；首次日志查看 `tmux attach -t dragon_log`，已连接时自动切换新日志 | 推荐 companion 单轮入口；一次模拟、两张图、XML 开启的 FITS；丰度来源/哈希、自动日志窗口、切换和原生耗时；不自动编辑参数/搜索/排队 |
+| `scripts/zgrid_convergence.py` | `python3 scripts/zgrid_convergence.py [--input <directory>] [--output <csv>] [--points 200]`；默认读取 `data/dragon_output/`、原子重算 `outputs/csv/zgrid_convergence.csv` | 离线复用 B/C LIS、p/He TOA 函数；按 DimZ 比较相邻及最大网格参考的百分比 P95；只读均匀网格元数据求 dz，不运行 DRAGON/SSH，不给出收敛判定；此固定 CSV 名称按任务要求保留，字段名称遵循指定列头 |
 | `dragon_utils/companion.py` | `from dragon_utils.companion import run_command, execute, upload, download`；参数列表、log、可选 host；前两函数可 `capture=True` | SSH/rsync、合并 stdout/stderr 与真实退出码；不调度模型 |
 | `scripts/xml_batch.py` | `from scripts.xml_batch import ModelSpec, prepare_models, file_hash, copy_baseline, save_state` | 本机手动准备输入和记录；库模块，无 CLI |
 | `dragon_utils/xml_manager/xml_modifier.py` | `load_xml/get_param` 只读；`modify_xml(template, params, output, diff)` 编辑 | 推荐 XML 接口；运行入口只读，物理参数编辑在用户检查之前 |

@@ -2,6 +2,35 @@
 
 从 `/home/ljiayi/dragon_project/` 使用 Python 3.10+。本目录只说明直属脚本；库接口见 `../dragon_utils/` 各目录 README。
 
+## zgrid_convergence.py
+
+离线分析已有 DRAGON2 TXT 的 Z 网格收敛差异，不启动模拟、不需要 SSH。默认输入为项目的 `data/dragon_output/`，默认 CSV 为 `outputs/csv/zgrid_convergence.csv`；默认路径基于脚本所在项目定位，从其他工作目录执行也有效。依赖现有 NumPy、SciPy、Matplotlib、lxml，不需要实验数据或 FITS。
+
+```bash
+cd /home/ljiayi/dragon_project
+python3 scripts/zgrid_convergence.py
+python3 scripts/zgrid_convergence.py \
+    --input /home/ljiayi/dragon_project/data/dragon_output/ \
+    --output /home/ljiayi/dragon_project/outputs/csv/zgrid_convergence.csv \
+    --points 200
+```
+
+`--input` 是 TXT 目录，`--output` 是 `.csv` 文件路径，`--points` 是至少 2 的整数。只识别 `YYYY-MM-DD_dimZ<N>.txt`，按 DimZ 数值递增排列；同一 DimZ 有多个日期时警告并选最新日期，最新文件损坏时跳过该 DimZ，不回退到旧日期。无效日期、缺列、非有限值、非正的比较量及不完整光谱会警告并跳过；没有有效光谱或没有共同物理区间时明确报错。只有一个有效 DimZ 时仍输出一行，相邻差异为空，参考差异为 0。
+
+B/C 复用 `BCfitting.load_model()` 的 LIS 同位素比值，以 GeV/n 为横轴并用 `numpy.interp()` 线性插值。质子和氦复用 `pHefitting.load_model()`、`coverage()`、`rigidity()`：质子包含初级和次级；He-3/He-4 分别调制并进行各自的刚度 Jacobian 转换后相加。太阳调制使用模块当前 `PHI_P`、`PHI_HE`（均为 0.64 GV），比较 TOA 通量，不乘绘图因子。每种量分别取全部有效模拟的共同区间并建立固定对数网格，默认各 200 点，禁止外推。TOA 下限沿用现有绘图实现的 `1e-8 GeV/n` 正能量下限；刚度端点向内移动相对 `1e-12` 以避免浮点舍入越界。终端打印三个实际比较区间和点数。新增文件改变共同区间时，旧行也随之重算。
+
+逐点差异为 `abs(Fnew - Fold) / abs(Fold) * 100`，再取 `numpy.percentile(..., 95)`，唯一统计指标是百分比 P95。相邻比较以紧邻的较小 DimZ 为分母；参考比较以当前最大的有效 DimZ 为分母，CSV 只存三种参考 P95 中最大的值。总体相邻 P95 也取三种相邻 P95 的最大值。这里的“最大值”是对三个 P95 的汇总，不是逐点最大差异；脚本不计算均值、逐点最大差异、实验拟合或收敛判定。
+
+CSV 列固定为：
+
+```text
+date,dimZ,dz_kpc,previous_dimZ,reference_dimZ,bc_adj_p95_pct,p_adj_p95_pct,he_adj_p95_pct,overall_adj_p95_pct,overall_ref_diff_pct,source_file
+```
+
+最小 DimZ 的 `previous_dimZ` 和所有相邻差异留空，最大 DimZ 的 `overall_ref_diff_pct` 为 0；数字不附 `%`。`dz_kpc` 优先读取项目 `outputs/workflow/<TXT主体>.json` 的 `params`（DimZ、L、zgrid），必要时回退到 `data/processed/<TXT主体>.xml` 或 workflow 记录的同主体本机 XML。只对明确的均匀网格复用 `xml_modifier.calc_dz()` 计算 `2L/(DimZ-1)`，缺少可靠元数据或非均匀网格则警告并留空，不猜测 L。自定义输入目录时，元数据仍在本脚本所在项目中寻找；不检查不同模拟之间的物理参数一致性。
+
+每次执行完整扫描和重算，通过同目录临时 CSV 和原子替换更新固定文件，不追加重复行；插入中间 DimZ 会更新相邻关系，新增最大 DimZ 会更新所有参考差异。整体计算失败时保留已有 CSV，原始 TXT/FITS/XML/JSON 不修改。终端最后报告有效模拟数、DimZ 列表、参考 DimZ、最新相邻比较及 CSV 路径。
+
 ## run_companion.py
 
 用户检查 XML 后主动执行一轮：校验输入、复制规范文件、SSH/rsync 同步、在 companion 启动一次 DRAGON2、等待退出状态、回传清单数据与日志、生成两张诊断图。不会修改物理参数，不连接旧 `calcmodlist.txt`，也不会提交下一轮。
