@@ -46,7 +46,8 @@
   * 运算结束并取回日志后，`run`、`fetch` 在脚本终端各打印一次 DRAGON 原生的 `Solution found in ... s.` 文本，并记录 `duration`；禁止用 Python 或开始/结束时间差替代该耗时。原生耗时行缺失时如实报告，不编造。
 * **DRAGON/DRAGON2 XML Parameters**:
   * All XML parameter files used, created, or stored by any task for DRAGON/DRAGON2 calculations must be kept in `/home/ljiayi/dragon_project/data/processed/`.
-  * companion 单轮输入、原始模拟数据及状态记录统一主体 `YYYY-MM-DD_dimZ<N>`，不按图的种类分类，不接收 `--task`；N 是 XML 的实际整数 DimZ。XML 与 `.source.param` 同目录同主体，源丰度缺失必须报错，不替换模板。
+  * companion 单轮输入、原始模拟数据及状态记录统一主体 `YYYY-MM-DD_dimZ<N>`，不按图的种类分类，不接收 `--task`；N 是 XML 的实际整数 DimZ。优先读取用户 XML 同目录同主体的 `.source.param`；该文件缺失时使用固定默认表 `/home/ljiayi/DRAGON2-Beta_version-master/config_files/template.source.param`。所选表按字节复制成 `data/processed/<stem>.source.param`，与规范 XML 同目录同主体并一同上传；预览/状态记录 `sourceDefault`、实际来源及 SHA256，使用默认表时终端和命令日志注明来源。同名表存在但无效时不得替换；默认表缺失/无效仍报错。不改动原始 XML 或丰度模板。
+  * 先完成本机规范 XML/丰度副本的全部复制及哈希、DimZ 核验，再上传这些副本；远端只用 `runXml` 指定的规范 XML 启动 DRAGON2，启动前核验上传文件名、同名丰度表、实际 DimZ、本轮主体与哈希一致。终端/命令日志显示本机准备路径、DimZ、远端启动路径，不依赖原文件名中的旧 DimZ。
   * 两张图片仍使用下述 BCratio/pHe 名称，允许图片主体中的两个下划线，覆盖旧单下划线限制；其他新变量、函数及文件名仍遵守原限制。
   * Asia/Tokyo 日期在每轮启动时固定，跨午夜不变。同日同 DimZ 使用统一状态与锁，重新运行直接覆盖对应的输入副本、状态、数据和图片；`fetch`、`plot` 同样直接替换对应文件，无需 `--overwrite`（旧参数仅作兼容）。仍拒绝并发提交以及覆盖 `prepared/launching/running/finalizing/unknown` 远端任务，日志每轮独立保留。不静默增加 UUID 或额外时间戳。历史 BCratio/pHe 主体仍可用于 `fetch`、`plot`，不自动改名或重算。
   * 原始 ASCII/fullstore FITS 归档到 `data/dragon_output/<stem>.txt` / `<stem>.fits.gz`；partialstore 原生 `<stem>_spectrum.fits.gz` 映射为 `<stem>-spectrum.fits.gz`，记录原始与归档名称。派生文件用简洁连字符后缀，区分空间分布与太阳位置谱。
@@ -86,6 +87,7 @@
 * **Plot Files**: 两脚本支持 `[source] --output /absolute/path/figure.png`。优先在调用时指定 Section 3 的精确图片路径，避免默认分钟名称碰撞，不在执行后猜测或选择最新图片。companion 入口始终传入本轮确切 TXT 和两张规范图片路径。
 * **Single Round**: 用户先手动检查 XML，再执行 `python3 /home/ljiayi/dragon_project/scripts/run_companion.py run /absolute/path/model.xml`；一次调用只模拟一遍并自动输出 BCratio、pHe 两张图。用 `--preview` 无写入预览，`fetch YYYY-MM-DD_dimZ<N>` 只查询/取回，`plot YYYY-MM-DD_dimZ<N>` 只重做两张图。用户没有选择实际 XML 时只实现、构建和无模拟验证，不自行运行历史模型。
 * **Completion**: 按真实进程退出码、XML 输出清单及哈希判定，失败也同步日志；断线先查状态，禁止盲目重跑，不以文件出现/大小稳定作为成功。均匀网格才记录 `2L/(DimZ-1)`，非均匀网格单独识别。固定 L 及物理参数，由用户选择 DimZ；实验 χ² 的改善不能替代网格收敛验证。
+  * 回传/校验中断且未生成本轮图片时，不把仍留在目录中的旧 DimZ 图片当作本轮结果；已成功的远端任务可用 `fetch <stem>`、`plot <stem>` 恢复，不重复模拟。
 
 ## 5. Research Goal: Reference Only
 
@@ -100,7 +102,7 @@ Read and apply this section **only when the user explicitly mentions this resear
 
 | 路径 | 用途及推荐调用 | 范围 |
 | --- | --- | --- |
-| `scripts/run_companion.py` | `python3 scripts/run_companion.py run <xml> [--preview]`；`fetch <stem>`、`plot <stem>`，主体 `YYYY-MM-DD_dimZ<N>`；首次日志查看 `tmux attach -t dragon_log`，已连接时自动切换新日志 | 推荐 companion 单轮入口；一次模拟、两张图、XML 开启的 FITS；自动日志窗口、切换和原生耗时；不自动编辑参数/搜索/排队 |
+| `scripts/run_companion.py` | `python3 scripts/run_companion.py run <xml> [--preview]`；缺少同名丰度表时使用固定默认表；`fetch <stem>`、`plot <stem>`，主体 `YYYY-MM-DD_dimZ<N>`；首次日志查看 `tmux attach -t dragon_log`，已连接时自动切换新日志 | 推荐 companion 单轮入口；一次模拟、两张图、XML 开启的 FITS；丰度来源/哈希、自动日志窗口、切换和原生耗时；不自动编辑参数/搜索/排队 |
 | `dragon_utils/companion.py` | `from dragon_utils.companion import run_command, execute, upload, download`；参数列表、log、可选 host；前两函数可 `capture=True` | SSH/rsync、合并 stdout/stderr 与真实退出码；不调度模型 |
 | `scripts/xml_batch.py` | `from scripts.xml_batch import ModelSpec, prepare_models, file_hash, copy_baseline, save_state` | 本机手动准备输入和记录；库模块，无 CLI |
 | `dragon_utils/xml_manager/xml_modifier.py` | `load_xml/get_param` 只读；`modify_xml(template, params, output, diff)` 编辑 | 推荐 XML 接口；运行入口只读，物理参数编辑在用户检查之前 |

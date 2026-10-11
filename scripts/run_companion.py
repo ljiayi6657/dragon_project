@@ -22,6 +22,7 @@ from scripts.xml_batch import file_hash, copy_baseline, save_state
 
 BASE = Path("/home/ljiayi/dragon_project")
 PROGRAM = Path("/home/ljiayi/dragon/DRAGON2-Beta_version-master")
+DEFAULT = Path("/home/ljiayi/DRAGON2-Beta_version-master/config_files/template.source.param")
 TOKYO = ZoneInfo("Asia/Tokyo")
 ACTIVE = {"prepared", "launching", "running", "finalizing", "unknown"}
 PATTERN = r"\d{4}-\d{2}-\d{2}_(?:(?:BCratio|pHe)_)?dimZ[1-9]\d*"
@@ -29,6 +30,7 @@ PATTERN = r"\d{4}-\d{2}-\d{2}_(?:(?:BCratio|pHe)_)?dimZ[1-9]\d*"
 # The remote worker uses only the standard library and survives SSH disconnects.
 REMOTE = r'''
 import datetime, fcntl, hashlib, json, os, pathlib, subprocess, sys, traceback
+import xml.etree.ElementTree as etree
 from zoneinfo import ZoneInfo
 request = json.loads(sys.argv[1])
 op = request['op']
@@ -62,6 +64,21 @@ elif op == 'launch':
         with open(item['remote'], 'rb') as stream:
             for block in iter(lambda: stream.read(1048576), b''): digest.update(block)
         if digest.hexdigest() != item['sha256']: raise RuntimeError('Input SHA256 mismatch')
+    xml = pathlib.Path(state['runXml'])
+    if str(xml) != state['inputs'][0]['remote'] or xml.name != state['stem'] + '.xml':
+        raise RuntimeError('Run XML must be the renamed uploaded copy')
+    if pathlib.Path(state['inputs'][1]['remote']) != xml.with_suffix('.source.param'):
+        raise RuntimeError('Run XML and source abundance must share the same stem')
+    text = xml.read_text()
+    if text.lstrip().startswith('<?xml'):
+        start = text.index('<?xml')
+        end = text.index('?>', start) + 2
+        text = text[:start] + text[end:]
+    nodes = etree.fromstring('<DragonConfig>' + text + '</DragonConfig>').findall('.//Grid/DimZ')
+    if len(nodes) != 1 or int(nodes[0].get('value')) != state['params']['DimZ']:
+        raise RuntimeError('Uploaded XML DimZ differs from the round plan')
+    if state['stem'] != state['date'] + '_dimZ' + str(int(nodes[0].get('value'))):
+        raise RuntimeError('Round name differs from uploaded XML DimZ')
     for name in state['history']: pathlib.Path(name).unlink()
     state['status'] = 'launching'
 elif op in ('status', 'worker'):
@@ -119,9 +136,9 @@ if op == 'worker':
                 with target.open('rb') as stream:
                     for block in iter(lambda: stream.read(1048576), b''): digest.update(block)
                 state['build'][str(target)] = digest.hexdigest()
-            log.write('Started: ' + state['started'] + '\nCommand: ./DRAGON ' + state['inputs'][0]['remote'] + '\n')
+            log.write('Started: ' + state['started'] + '\nCommand: ./DRAGON ' + state['runXml'] + '\n')
             log.flush()
-            done = subprocess.run([str(program / 'DRAGON'), state['inputs'][0]['remote']], cwd=program,
+            done = subprocess.run([str(program / 'DRAGON'), state['runXml']], cwd=program,
                                   env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
             state.update(status='finalizing', exitcode=done.returncode)
             state['outputs'] = []
@@ -156,8 +173,10 @@ def inspect_xml(path):
     if not path.is_file() or path.suffix != ".xml":
         raise ValueError(f"Expected an explicit XML file: {path}")
     source = path.with_suffix(".source.param")
+    if not source.exists():
+        source = DEFAULT
     if not source.is_file():
-        raise FileNotFoundError(f"Missing exact source abundance: {source}")
+        raise FileNotFoundError(f"Source abundance unavailable: {source}")
     doc = load_xml(path)
     values = {}
     for name in ("L", "Rmax", "Ekmin", "Ekmax", "Ekfactor", "DimZ", "Zmin", "Zmax"):
@@ -242,7 +261,8 @@ def make_plan(xml, now=None):
         if values[flag]:
             expected.append(dict(native=stem + suffix, archive=stem + archive, kind=kind))
     return dict(stem=stem, date=now.strftime("%Y-%m-%d"), startedLocal=now.isoformat(),
-                params=values, inputs=inputs, expected=expected, program=str(PROGRAM),
+                params=values, inputs=inputs, sourceDefault=source != path.with_suffix(".source.param"),
+                expected=expected, program=str(PROGRAM), runXml=inputs[0]['remote'],
                 figures={name: str(BASE / "outputs/figures" / f"{now:%Y-%m-%d}_{name}_dimZ{values['DimZ']}.png")
                          for name in ("BCratio", "pHe")})
 
@@ -371,6 +391,12 @@ def draw(state, log):
 def run(log, state):
     """Submit exactly one round, then wait and retrieve its completed outputs."""
     target = BASE / "outputs/workflow" / (state["stem"] + ".json")
+    if state.get("sourceDefault"):
+        source = state["inputs"][1]
+        message = f"Using default source abundance: {source['original']}; SHA256: {source['sha256']}"
+        print(message, flush=True)
+        with Path(log).open("a", encoding="utf-8") as stream:
+            stream.write(message + "\n")
     state.update(token=file_hash(log) + datetime.now(TOKYO).isoformat(), remoteLog=str(new_log()),
                  localLog=str(log), status="preparing")
     reserved = False
@@ -383,6 +409,14 @@ def run(log, state):
                 copy_baseline(item["original"], item["local"], overwrite=True)
             if file_hash(item["local"]) != item["sha256"]:
                 raise ValueError("Input changed during preparation")
+        prepared = Path(state["inputs"][0]["local"])
+        if int(get_param(load_xml(prepared), "DimZ")) != state["params"]["DimZ"]:
+            raise ValueError("Prepared XML DimZ differs from the round plan")
+        message = f"Prepared XML: {prepared}; DimZ={state['params']['DimZ']}\nCompanion XML: {state['runXml']}"
+        print(message, flush=True)
+        with Path(log).open("a", encoding="utf-8") as stream:
+            stream.write(message + "\n")
+        for item in state["inputs"]:
             companion.upload(item["local"], item["remote"], log)
         state = rpc("launch", state["stem"], log, token=state["token"])
         save_state(target, state)
