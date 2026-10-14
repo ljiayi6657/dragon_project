@@ -58,18 +58,26 @@ python dragon_utils/plotting/pHefitting.py /path/to/dragon_output/
 python dragon_utils/plotting/pHefitting.py /path/to/spectrum.txt
 ```
 
-For a directory, the newest `.txt` file is selected by modification time (filename breaks ties), and the absolute selected path is printed. Invalid inputs fail with a nonzero exit status. The output directory is created when absent. The single figure is named `pHeratio_YY-MM-DD-TTTT.png` using `Asia/Tokyo`, with `TTTT` equal to 24-hour `HHMM`; its absolute path is printed. Runs within the same minute overwrite the same default figure. Pass `--output /absolute/path/figure.png` to choose an exact path; `plot_flux(energy, flux, output=None)` optionally saves there and still returns `(fig, results, toa)`. The companion entry supplies `YYYY-MM-DD_pHe_dimZ<N>.png`, checks collisions, and uses the exact spectrum shared with B/C.
+For a directory, the newest `.txt` file is selected by modification time (filename breaks ties), and the absolute selected path is printed. Invalid inputs fail with a nonzero exit status. The output directory is created when absent. The single figure is named `pHeratio_YY-MM-DD-TTTT.png` using `Asia/Tokyo`, with `TTTT` equal to 24-hour `HHMM`; its absolute path is printed. Runs within the same minute overwrite the same default figure. Pass `--output /absolute/path/figure.png` to choose an exact path; `plot_flux(energy, flux, output=None)` optionally saves there and still returns `(fig, results, toa)`.
+
+`pHefitting.py` 保留未经 R^2.7 展示加权的接口及 Z 网格分析依赖；companion 默认绘图改为下述 `pHefitting27.py`，使用与 B/C 同轮的确切 TXT。
 
 
 ## 显式输出与单轮流程
 
 ```bash
 python3 dragon_utils/plotting/BCfitting.py data/dragon_output/2026-10-10_dimZ81.txt --output /home/ljiayi/dragon_project/outputs/figures/2026-10-10_BCratio_dimZ81.png
-python3 dragon_utils/plotting/pHefitting.py data/dragon_output/2026-10-10_dimZ81.txt --output /home/ljiayi/dragon_project/outputs/figures/2026-10-10_pHe_dimZ81.png
+python3 dragon_utils/plotting/pHefitting27.py data/dragon_output/2026-10-14_dimZ121.txt --output /home/ljiayi/dragon_project/outputs/figures/2026-10-14_pHe_dimZ121.png
 ```
 
 日期/DimZ 替换为实际该轮值。`scripts/run_companion.py run <xml>` 无需 `--task`，一次模拟自动生成两张图；`plot YYYY-MM-DD_dimZ<N>` 也会用同一份数据重做两张图。单轮入口与直接调用绘图脚本都允许覆盖同名图片，无需 `--overwrite`；单轮入口还提供并发锁、哈希绑定及恢复。依赖 Python 3.10+、NumPy、Matplotlib；pHe 还需 SciPy 及 `data_processing.physics/statistic_analysis`。输入数据和单位、调制、同位素求和、统计定义均保留上文口径；所有正式图片直接保存到项目 `outputs/figures/`。
 
 ## pHefitting27.py
 
-独立的 p/He 展示版本，CLI `python3 dragon_utils/plotting/pHefitting27.py /absolute/path/spectrum.txt`；输入可为明确 TXT 或目录（选择最新 TXT），省略时默认 `data/dragon_output/`。主要函数仍是 `load_model`、`load_ams`、`modulate`、`rigidity`、`plot_flux`、`main`，依赖和 AMS 本地路径与 pHefitting.py 相同。质子为 Sec_p+Pri_p，He-3/4 分别调制并在刚度上相加，固定势 0.64 GV，p/He 不计算 χ²；与 pHefitting.py 的差别是前两个面板展示 R^2.7 乘以谱和误差，统计仍用未经该展示权重改变的谱。默认图片 `outputs/figures/pHefitting27_YYYY-MM-DD.png`，同日会覆盖；这是保留的旧接口，尚不支持 `--output`，不作为 companion 单轮默认入口。
+companion 默认使用的 p/He 展示版本，CLI `python3 /home/ljiayi/dragon_project/dragon_utils/plotting/pHefitting27.py /absolute/path/spectrum.txt [--output /absolute/path/figure.png]`；输入可为明确 TXT 或目录（选择最新 TXT），省略时默认 `data/dragon_output/`。主要函数仍是 `load_model`、`load_ams`、`modulate`、`rigidity`、`plot_flux`、`main`，依赖和 AMS 本地路径与 pHefitting.py 相同。质子为 Sec_p+Pri_p，He-3/4 分别调制并在刚度上相加，固定势 0.64 GV，p/He 不计算 χ²。
+
+前两个面板的模型乘 `grid**2.7`，观测值和误差棒乘对应观测点的 `points**2.7`，纵轴为 `R^2.7 Flux [cm^-2 s^-1 sr^-1 GV^1.7]`。权重仅用于展示，χ² 始终使用未加权通量，第三幅等刚度 p/He 模型比值和观测误差不变。`plot_flux(energy, flux, output=None)` 可保存到精确路径，并返回 `(fig, results, toa)`。
+
+默认图片为 `outputs/figures/YYYY-MM-DD_pHe27.png`（Asia/Tokyo，同日覆盖）；`--output` 覆盖默认路径。companion 显式传入原有规范名称 `YYYY-MM-DD_pHe_dimZ<N>.png`，在 figures/ 直属临时 PNG 完成后原子替换并记录哈希。生成图不会运行 DRAGON、不修改 TXT/FITS/XML；历史未加权图可使用其对应原始 TXT 加精确 `--output` 重画。未经加权的 `pHefitting.py` 和 CSV 收敛分析的数值不随此展示切换改变。
+
+2026-10-14 已按各自原始 TXT 覆盖 25 张未加权历史图，保留原文件名；两张已加权的历史图保持原样。覆盖清单、输入与图片前后哈希、统计结果及历史实验缩放记录在 `outputs/workflow/2026-10-14_pHe.json`，对应运行日志路径也在清单中。18 份 companion 状态及原有氦缩放实验记录已更新图片哈希。早期临时 He-3×3、He-4×4 实验图保留原实验缩放并标注 scaled He；其他历史图使用各自原始谱，不借用最新模拟结果。

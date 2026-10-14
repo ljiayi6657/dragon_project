@@ -39,6 +39,8 @@ date,dimZ,dz_kpc,previous_dimZ,reference_dimZ,bc_adj_max_pct,p_adj_max_pct,he_ad
 
 用户检查 XML 后主动执行一轮：校验输入、复制规范文件、SSH/rsync 同步、在 companion 启动一次 DRAGON2、等待退出状态、回传清单数据与日志、生成两张诊断图。不会修改物理参数，不连接旧 `calcmodlist.txt`，也不会提交下一轮。
 
+pHe 图片默认调用 `dragon_utils/plotting/pHefitting27.py`：质子和总氦 TOA 模型、AMS 观测及误差棒同时乘各自横轴刚度的 `R^2.7`，纵轴单位为 `cm^-2 s^-1 sr^-1 GV^1.7`。太阳调制、He-3/He-4 等刚度求和和原始 χ² 定义保持不变；第三幅 p/He 比值不乘该权重。两张规范图片名称及精确 `--output` 暂存／替换机制保持不变。仅重画某轮图片仍使用 `plot <stem>`，不重新模拟。
+
 准备与上传分开执行：从所选 XML 内容读取实际 DimZ，先在本机 `data/processed/` 准备 `YYYY-MM-DD_dimZ<N>.xml` 和同主体丰度表，全部副本的哈希与 DimZ 核验通过后，再上传这两份规范副本。远端启动命令只使用计划中的 `runXml`（规范副本的远端路径），不使用用户原文件名；启动前再核验远端 XML/丰度文件同名关系、哈希、XML 实际 DimZ 与本轮主体的一致性。终端和命令日志会显示 `Prepared XML`、实际 DimZ 与 `Companion XML`。例如原文件叫 `dimZ81_copy.xml`，内容为 DimZ=131，则计算输入、TXT/FITS 和两张图片均使用本轮日期及 `dimZ131`。`--preview` 也显示 `runXml`，但不复制或上传。
 
 ```bash

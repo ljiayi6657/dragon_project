@@ -368,7 +368,7 @@ def draw(state, log):
     spectrum = next(item["local"] for item in state["outputs"] if item["kind"] == "ascii")
     state["plots"] = {}
     try:
-        for name, script in (("BCratio", "BCfitting.py"), ("pHe", "pHefitting.py")):
+        for name, script in (("BCratio", "BCfitting.py"), ("pHe", "pHefitting27.py")):
             target = Path(state["figures"][name])
             target.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(prefix="companion-", suffix=".png", dir=target.parent, delete=False) as temp:
