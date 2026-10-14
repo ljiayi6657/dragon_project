@@ -1,4 +1,4 @@
-"""Compare existing DRAGON2 vertical grids using P95 relative differences."""
+"""Compare DRAGON2 vertical grids within 0.1 to 50000 GeV/n kinetic energy."""
 
 import argparse
 from contextlib import redirect_stdout
@@ -26,10 +26,12 @@ from dragon_utils.xml_manager.xml_modifier import calc_dz, get_param, load_xml
 PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})_dimZ([1-9]\d*)\.txt")
 FIELDS = (
     "date", "dimZ", "dz_kpc", "previous_dimZ", "reference_dimZ",
-    "bc_adj_p95_pct", "p_adj_p95_pct", "he_adj_p95_pct",
-    "overall_adj_p95_pct", "overall_ref_diff_pct", "source_file",
+    "bc_adj_max_pct", "p_adj_max_pct", "he_adj_max_pct",
+    "overall_adj_max_pct", "overall_ref_max_pct", "source_file",
 )
 LABELS = {"bc": "B/C", "p": "proton", "He": "helium"}
+EMIN = 0.1
+EMAX = 50000.0
 
 
 def warn(message):
@@ -90,14 +92,14 @@ def load_spectra(directory):
 
 
 def make_grids(models, points):
-    """Use one common logarithmic grid per quantity without extrapolation."""
+    """Intersect the energy window with shared coverage without extrapolation."""
     if not isinstance(points, int) or isinstance(points, bool) or points < 2:
         raise ValueError("--points must be an integer of at least 2")
     grids = {}
-    lo = max(model["energy"][0] for model in models)
-    hi = min(model["energy"][-1] for model in models)
+    lo = max(EMIN, max(model["energy"][0] for model in models))
+    hi = min(EMAX, min(model["energy"][-1] for model in models))
     if hi <= lo:
-        raise ValueError("No common B/C kinetic-energy interval")
+        raise ValueError("No common B/C coverage within the deviation energy window")
     grids["bc"] = np.geomspace(lo, hi, points)
     for mode, phi in (("p", phe.PHI_P), ("He", phe.PHI_HE)):
         if not np.isfinite(phi) or phi < 0:
@@ -106,10 +108,12 @@ def make_grids(models, points):
         for model in models:
             energy = model["energy"]
             for name, charge, massnum, mass in phe.SPECIES[mode]:
-                low = max(energy[0] - charge * phi / massnum, 1e-8)
-                high = energy[-1] - charge * phi / massnum
+                # Apply the window to TOA energy, retaining the full LIS input.
+                low = max(energy[0] - charge * phi / massnum, EMIN)
+                high = min(energy[-1] - charge * phi / massnum, EMAX)
                 if high <= low:
-                    raise ValueError(f"No valid {name} TOA range in {model['source'].name}")
+                    raise ValueError(f"No {name} TOA coverage within the deviation energy "
+                                     f"window in {model['source'].name}")
                 # Invert the existing kinetic conversion only to determine coverage.
                 bounds.append((massnum / charge * np.sqrt(low * (low + 2 * mass)),
                                massnum / charge * np.sqrt(high * (high + 2 * mass))))
@@ -175,7 +179,7 @@ def spacing(source, dimz):
     return None
 
 
-def p95(new, old, label):
+def maxdiff(new, old, label):
     """Use the second spectrum as the relative-difference denominator."""
     if new.shape != old.shape or new.size == 0:
         raise ValueError(f"{label}: comparison arrays must have matching nonempty shapes")
@@ -186,7 +190,7 @@ def p95(new, old, label):
         diff = np.abs(new - old) / np.abs(old) * 100
     if not np.all(np.isfinite(diff)):
         raise ValueError(f"{label}: relative differences overflowed; cannot compare reliably")
-    return float(np.percentile(diff, 95))
+    return float(np.max(diff))
 
 
 def analyze(directory, points=200):
@@ -206,17 +210,17 @@ def analyze(directory, points=200):
         row.update(date=source.name[:10], dimZ=model["dimZ"],
                    dz_kpc=spacing(source, model["dimZ"]),
                    reference_dimZ=reference["dimZ"], source_file=source.name)
-        ref = [p95(model["values"][key], reference["values"][key], LABELS[key])
+        ref = [maxdiff(model["values"][key], reference["values"][key], LABELS[key])
                for key in LABELS]
-        row["overall_ref_diff_pct"] = max(ref)
+        row["overall_ref_max_pct"] = max(ref)
         if index:
             previous = models[index - 1]
-            adjacent = [p95(model["values"][key], previous["values"][key], LABELS[key])
+            adjacent = [maxdiff(model["values"][key], previous["values"][key], LABELS[key])
                         for key in LABELS]
             row["previous_dimZ"] = previous["dimZ"]
             for column, value in zip(FIELDS[5:8], adjacent):
                 row[column] = value
-            row["overall_adj_p95_pct"] = max(adjacent)
+            row["overall_adj_max_pct"] = max(adjacent)
         rows.append(row)
     return rows, grids
 
@@ -262,6 +266,8 @@ def main():
     print(f"Valid simulations: {len(rows)}")
     print("DimZ (ascending): " + ", ".join(str(row["dimZ"]) for row in rows))
     print(f"Reference DimZ: {rows[-1]['reference_dimZ']}")
+    print(f"Deviation energy window: {EMIN:g} to {EMAX:g} GeV/n "
+          "(kinetic; B/C LIS, proton/helium TOA)")
     for key, grid in grids.items():
         unit = "GeV/n" if key == "bc" else "GV"
         print(f"{LABELS[key]} common range: {grid[0]:.8g} to {grid[-1]:.8g} {unit}; "
@@ -270,7 +276,7 @@ def main():
         latest = rows[-1]
         print(f"Latest adjacent comparison: {latest['dimZ']} vs {latest['previous_dimZ']}")
         for label, column in zip(("B/C", "proton", "helium", "overall"), FIELDS[5:9]):
-            print(f"  {label} P95: {latest[column]:.8g}%")
+            print(f"  {label} maximum relative difference: {latest[column]:.8g}%")
     else:
         print("Latest adjacent comparison: unavailable (only one valid DimZ)")
     print(f"Updated CSV: {target}")

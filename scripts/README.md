@@ -17,19 +17,23 @@ python3 scripts/zgrid_convergence.py \
 
 `--input` 是 TXT 目录，`--output` 是 `.csv` 文件路径，`--points` 是至少 2 的整数。只识别 `YYYY-MM-DD_dimZ<N>.txt`，按 DimZ 数值递增排列；同一 DimZ 有多个日期时警告并选最新日期，最新文件损坏时跳过该 DimZ，不回退到旧日期。无效日期、缺列、非有限值、非正的比较量及不完整光谱会警告并跳过；没有有效光谱或没有共同物理区间时明确报错。只有一个有效 DimZ 时仍输出一行，相邻差异为空，参考差异为 0。
 
-B/C 复用 `BCfitting.load_model()` 的 LIS 同位素比值，以 GeV/n 为横轴并用 `numpy.interp()` 线性插值。质子和氦复用 `pHefitting.load_model()`、`coverage()`、`rigidity()`：质子包含初级和次级；He-3/He-4 分别调制并进行各自的刚度 Jacobian 转换后相加。太阳调制使用模块当前 `PHI_P`、`PHI_HE`（均为 0.64 GV），比较 TOA 通量，不乘绘图因子。每种量分别取全部有效模拟的共同区间并建立固定对数网格，默认各 200 点，禁止外推。TOA 下限沿用现有绘图实现的 `1e-8 GeV/n` 正能量下限；刚度端点向内移动相对 `1e-12` 以避免浮点舍入越界。终端打印三个实际比较区间和点数。新增文件改变共同区间时，旧行也随之重算。
+B/C 复用 `BCfitting.load_model()` 的 LIS 同位素比值，以 GeV/n 为横轴并用 `numpy.interp()` 线性插值。质子和氦复用 `pHefitting.load_model()`、`coverage()`、`rigidity()`：质子包含初级和次级；He-3/He-4 分别调制并进行各自的刚度 Jacobian 转换后相加。太阳调制使用模块当前 `PHI_P`、`PHI_HE`（均为 0.64 GV），比较 TOA 通量，不乘绘图因子。
 
-逐点差异为 `abs(Fnew - Fold) / abs(Fold) * 100`，再取 `numpy.percentile(..., 95)`，唯一统计指标是百分比 P95。相邻比较以紧邻的较小 DimZ 为分母；参考比较以当前最大的有效 DimZ 为分母，CSV 只存三种参考 P95 中最大的值。总体相邻 P95 也取三种相邻 P95 的最大值。这里的“最大值”是对三个 P95 的汇总，不是逐点最大差异；脚本不计算均值、逐点最大差异、实验拟合或收敛判定。
+所有最大相对差异只在 **0.1 GeV/n 至 50 TeV/n（50000 GeV/n）的动能区间**内计算，上下限在脚本的 `EMIN`、`EMAX` 中固定。B/C 限制 LIS 能量；质子和氦限制调制后的 TOA 能量，再按各核素的质量与 A/Z 转为刚度。总氦采用 He-3 与 He-4 所允许刚度区间的交集，确保两种同位素都在指定能量窗口内，同时保持等刚度求和。完整 LIS 输入保留，供太阳调制所需的能量平移和插值使用。
+
+每种量分别取指定能量窗口与全部有效模拟覆盖范围的交集，并建立固定对数网格，默认各 200 点，禁止外推；无共同区间时明确报错，不输出假定覆盖完整窗口的结果。若较旧模拟未覆盖至 50 TeV/n，实际比较上限随共同覆盖范围降低。刚度端点向内移动相对 `1e-12` 以避免浮点舍入越界。终端打印指定能量窗口、三个实际比较区间和点数。新增文件改变共同区间时，旧行也随之重算。
+
+逐点差异为 `abs(Fnew - Fold) / abs(Fold) * 100`，再取 `numpy.max()`，主指标为比较区间内的最大相对差异（百分比）。相邻比较以紧邻的较小 DimZ 为分母；参考比较以当前最大的有效 DimZ 为分母。总体相邻及参考指标分别取 B/C、质子、总氦三个最大相对差异中的最大值。质子和 He-3/He-4 保留原有太阳调制及等刚度求和，总氦不是同位素误差最大值。B/C 仍沿用原来的 LIS 诊断口径，不在此次回退中新增其太阳调制。脚本不再计算 P95，不进行边缘检测、截断、Raw／Adjusted 分组、JSON 报告、诊断绘图、实验拟合或收敛判定；1% 仅供用户解释结果。最大值约束当前共同网格上的已检查位置，不等同于真实离散化误差上界。
 
 CSV 列固定为：
 
 ```text
-date,dimZ,dz_kpc,previous_dimZ,reference_dimZ,bc_adj_p95_pct,p_adj_p95_pct,he_adj_p95_pct,overall_adj_p95_pct,overall_ref_diff_pct,source_file
+date,dimZ,dz_kpc,previous_dimZ,reference_dimZ,bc_adj_max_pct,p_adj_max_pct,he_adj_max_pct,overall_adj_max_pct,overall_ref_max_pct,source_file
 ```
 
-最小 DimZ 的 `previous_dimZ` 和所有相邻差异留空，最大 DimZ 的 `overall_ref_diff_pct` 为 0；数字不附 `%`。`dz_kpc` 优先读取项目 `outputs/workflow/<TXT主体>.json` 的 `params`（DimZ、L、zgrid），必要时回退到 `data/processed/<TXT主体>.xml` 或 workflow 记录的同主体本机 XML。只对明确的均匀网格复用 `xml_modifier.calc_dz()` 计算 `2L/(DimZ-1)`，缺少可靠元数据或非均匀网格则警告并留空，不猜测 L。自定义输入目录时，元数据仍在本脚本所在项目中寻找；不检查不同模拟之间的物理参数一致性。
+最小 DimZ 的 `previous_dimZ` 和所有相邻差异留空，最大 DimZ 的 `overall_ref_max_pct` 为 0；数字不附 `%`。`dz_kpc` 优先读取项目 `outputs/workflow/<TXT主体>.json` 的 `params`（DimZ、L、zgrid），必要时回退到 `data/processed/<TXT主体>.xml` 或 workflow 记录的同主体本机 XML。只对明确的均匀网格复用 `xml_modifier.calc_dz()` 计算 `2L/(DimZ-1)`，缺少可靠元数据或非均匀网格则警告并留空，不猜测 L。自定义输入目录时，元数据仍在本脚本所在项目中寻找；不检查不同模拟之间的物理参数一致性。
 
-每次执行完整扫描和重算，通过同目录临时 CSV 和原子替换更新固定文件，不追加重复行；插入中间 DimZ 会更新相邻关系，新增最大 DimZ 会更新所有参考差异。整体计算失败时保留已有 CSV，原始 TXT/FITS/XML/JSON 不修改。终端最后报告有效模拟数、DimZ 列表、参考 DimZ、最新相邻比较及 CSV 路径。
+每次执行只生成 CSV，完整扫描和重算，通过同目录临时 CSV 和原子替换更新固定文件，不追加重复行；插入中间 DimZ 会更新相邻关系，新增最大 DimZ 会更新所有参考差异。整体计算失败时保留已有 CSV，原始 TXT/FITS/XML/JSON 不修改。终端最后报告有效模拟数、DimZ 列表、参考 DimZ、最新相邻比较及 CSV 路径。
 
 ## run_companion.py
 
