@@ -122,7 +122,7 @@ if op == 'worker':
             files += list((program / 'cparamlib').glob('*.c')) + list((program / 'cparamlib').glob('*.h'))
             files += [program / name for name in ('DRAGON', '.libs/DRAGON', '.libs/libDRAGON.so.0', '.libs/libTiXML.so.0', 'cparamlib/.libs/libcparamlib.so.0')]
             env = dict(os.environ)
-            env['LD_LIBRARY_PATH'] = ':'.join([str(program / '.libs'), str(program / 'cparamlib/.libs'), '/home/ljiayi/.local/dragon/usr/lib/x86_64-linux-gnu', env.get('LD_LIBRARY_PATH', '')])
+            env['LD_LIBRARY_PATH'] = ':'.join([str(program / '.libs'), str(program / 'cparamlib/.libs'), '/home/ljiayi/.local/dragon/cfitsio47/lib', '/home/ljiayi/.local/dragon/usr/lib/x86_64-linux-gnu', env.get('LD_LIBRARY_PATH', '')])
             dependencies = subprocess.run(['ldd', str(program / '.libs/DRAGON')], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             log.write(dependencies.stdout)
             if dependencies.returncode or 'not found' in dependencies.stdout:

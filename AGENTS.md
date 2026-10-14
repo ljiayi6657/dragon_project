@@ -35,7 +35,8 @@
 * 用户提到在 **companion** 上执行任务时，指通过 SSH 连接上述实验室内网主机进行计算。
 * 默认在本机准备和检查 XML，在 companion 上运行 DRAGON2，将本轮结果及全部运行日志同步回本机
 * **计算线程**：companion 当前构建为 48 个 OpenMP 线程。配置同时使用 `--with-numcpu=48` 与 `CPPFLAGS=-I<prefix>/include -DNUMTHREADS=48`，生成的 `NUMTHREADS`、`OMP_NUM_THREADS` 宏均为 48。修改计算线程数需在无运行中模型时重新配置、编译；不自动终止既有计算。`make -j4` 仅控制编译并行度。主机有 24 个物理核心、48 个逻辑 CPU。
-* **构建记录**：当前版本见 `outputs/workflow/2026-10-10_threads48.json`，完整构建/验证日志在 `logs/`；`2026-10-10_threads.json`、`2026-10-10_build.json` 分别保留历史 24、4 线程构建记录。24 线程运行记录另存 `outputs/workflow/2026-10-10_cpu24.json`，同一 XML 的 24/48 线程原生耗时比较见 `2026-10-10_speed.json`，不覆盖历史源码/程序哈希。
+* **构建记录**：最新 CFITSIO 大 FITS 修复见 `outputs/workflow/2026-10-14_fits.json`，48 线程构建基础见 `outputs/workflow/2026-10-10_threads48.json`，完整构建/验证日志在 `logs/`；`2026-10-10_threads.json`、`2026-10-10_build.json` 分别保留历史 24、4 线程构建记录。24 线程运行记录另存 `outputs/workflow/2026-10-10_cpu24.json`，同一 XML 的 24/48 线程原生耗时比较见 `2026-10-10_speed.json`，不覆盖历史源码/程序哈希。
+* **FITS 库**：companion 的 CFITSIO 4.7.0 独立安装在 `/home/ljiayi/.local/dragon/cfitsio47/`，重建优先使用其 include/lib/rpath；原 `/home/ljiayi/.local/dragon/usr/` 保留旧库及当前 GSL。worker 的 LD_LIBRARY_PATH 包含新 CFITSIO 的 lib。旧 CFITSIO 4.0.0 的 gzip 写出可能将超过 4 GiB 的 fullstore 截断，不能回退后继续此类大文件计算；升级不恢复已有损坏文件。更换库后核验运行时链接、48 线程宏和物理源码哈希，使用无 DRAGON 模拟的 FITS 回归验证。
 
 
 ## 3. Execution & Logging Rules

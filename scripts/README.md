@@ -88,6 +88,12 @@ SSH 中断或 Ctrl-C 后保留远端任务，使用同一 stem 的 `fetch` 检�
 
 companion 当前构建为 **48 个计算线程**，记录在 `outputs/workflow/2026-10-10_threads48.json` 和对应 `logs/`；`2026-10-10_threads.json`、`2026-10-10_build.json` 分别保留历史 24、4 线程构建记录。主机有 24 个物理核心、48 个逻辑 CPU。依赖用 Ubuntu jammy 的 GSL/CFITSIO 包解包到 `/home/ljiayi/.local/dragon/usr/`，不需要 sudo。配置需给该 include、multiarch 库目录及 rpath，`--with-gsl-path=<prefix>/bin --with-cfitsio=<prefix> --with-numcpu=48`，链接参数还需 `-Wl,--disable-new-dtags -Wl,-rpath,<prefix>/lib/x86_64-linux-gnu`，让依赖的间接共享库也能解析；以及 `CPPFLAGS=-I<prefix>/include -DNUMTHREADS=48`；随后 `make clean`、`make -j4`。`make -j4` 只控制编译并行度，计算使用 48 线程。生成的 `config.h` 中 `NUMTHREADS` 与 `OMP_NUM_THREADS` 均为 48；求解器显式使用这些编译宏，改变计算线程数需重新编译。运行 worker 显式提供该依赖库目录和程序 `.libs` 路径。24 线程运行文件备份为远端 workflow 的 `2026-10-10_threads24.tar.gz`；历史 4 线程备份 `2026-10-10_threads-before.tar.gz` 仍保留。物理源码哈希、依赖、启动器及独立 OpenMP 48 线程组已验证。用户指定同一份 `2026-10-10_dimZ81.xml` 进行 24/48 线程比较；24 线程运行记录另存 `2026-10-10_cpu24.json`，DRAGON 原生耗时比较保存在 `2026-10-10_speed.json`。
 
+2026-10-14 的大 FITS 修复：companion 使用独立安装的 **CFITSIO 4.7.0**，前缀 `/home/ljiayi/.local/dragon/cfitsio47/`；旧 Ubuntu CFITSIO 4.0.0 及 GSL 保留在原 usr/ 前缀，GSL 不迁移。官方在 CFITSIO 4.4.0 修复超过 2^32 字节内存文件直接写 gzip 的问题；旧版本可在无报错情况下输出截断的 `.fits.gz`。保持输出文件名、XML、物理源码和 48 个计算线程不变。修复记录、构建／回归日志见 `outputs/workflow/2026-10-14_fits.json`；旧构建备份在 companion 的 `outputs/workflow/2026-10-14_fits-before.tar.gz`。
+
+重建该修复版本时，`--with-cfitsio=/home/ljiayi/.local/dragon/cfitsio47`；CPPFLAGS 先包含该前缀的 include，再包含原 usr/include 和 `-DNUMTHREADS=48`；LDFLAGS 先给新前缀的 lib 及 rpath，再给原 multiarch 库目录及 rpath。GSL 参数仍为 `--with-gsl-path=/home/ljiayi/.local/dragon/usr/bin`。worker 的 LD_LIBRARY_PATH 同时列出新 CFITSIO、旧 GSL、程序及 cparamlib 的库目录。完整重建命令也记录在 companion 程序目录的 README.md。仅在没有运行中的 DRAGON 时配置、编译；不自动停止计算。此前截断的 fullstore 缺失数据无法由升级或重新下载补回；升级用于之后的运行，不把旧损坏文件当作有效输出。
+
+独立 FITS 回归的源文件归档为 `outputs/workflow/2026-10-14_fits.c`，结果为同目录 `2026-10-14_fits-test.json`；使用 52 个 HDU、每个形状 99×41×41×131，总计 4,534,885,440 字节。旧库仅写出 239,918,144 字节，恰好少 4 GiB；新库写出全部字节并读回最后一个 HDU 的标记。新 DRAGON 的实际链接、48 线程宏和 56 个未变物理源码的校验结果见 `2026-10-14_fits-check.json`。这次修复验证未启动 DRAGON 模拟，DimZ131 原运行的损坏 fullstore 和失败回传状态没有改写。
+
 ## xml_batch.py
 
 本机批量输入准备库，没有 CLI 主循环；不运行 DRAGON。`ModelSpec(name, params, drops=())` 描述一组手动参数，`prepare_models(...)` 用 `xml_manager.modify_xml` 生成 XML、同名源丰度、文本 diff、日志及 JSON 状态。`copy_baseline` 保持字节内容，`file_hash` 返回 SHA256，`check_new` 默认拒绝覆盖，`save_state` 保存 JSON。依赖 Python 3.10+ 与 lxml。
