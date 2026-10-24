@@ -2,9 +2,9 @@
 
 ## BCfitting.py
 
-Plots a diagnostic comparison of a DRAGON2 B/C ratio with AMS-02 observations. It sums B-10 and B-11, and C-12, C-13, and C-14 from the DRAGON2 ASCII spectrum. The three panels show B/C, Model / Data, and fractional residual.
+Plots a diagnostic comparison of a solar-modulated DRAGON2 B/C ratio with AMS-02 TOA observations. It applies isotope-aware force-field modulation to B-10, B-11, C-12, C-13, and C-14 separately, then sums the two boron and three carbon fluxes before taking the ratio. The fixed potential is **0.64 GV**, matching `prop/BayesianOptimization/config.yaml`. The three panels show B/C, Model / Data, and fractional residual.
 
-The model output is an unmodulated local interstellar spectrum (LIS), while the AMS-02 data are near-Earth observations (TOA). This plot is for visual inspection; its ratios and residuals are not a physical fit statistic.
+The DRAGON2 ASCII input remains an unmodulated local interstellar spectrum (LIS); only the model is modulated, and the plotted comparison is TOA against TOA. `load_model(source)` retains the unmodulated B/C return used by the Z-grid convergence analysis, while `load_model(source, components=True)` returns the isotope LIS fluxes used by the plot. This plot remains a visual diagnostic; it does not perform parameter optimization.
 
 ### Default paths
 
@@ -21,7 +21,7 @@ python dragon_utils/plotting/BCfitting.py /path/to/dragon_output/
 python dragon_utils/plotting/BCfitting.py /path/to/spectrum.txt
 ```
 
-For a directory, the newest `.txt` spectrum is selected. The paths at the top of the script can be edited. Default output uses `YYYY-MM-DD_BCratio-HHMM.png`. The optional `--output /absolute/path/figure.png` overrides it. `plot_bc(..., output=None)` accepts an exact file path; an existing directory or suffix-free path retains the legacy directory behavior. The companion entry supplies `YYYY-MM-DD_BCratio_dimZ<N>.png` and checks collisions before plotting.
+For a directory, the newest `.txt` spectrum is selected. The paths and `PHI_BC` at the top of the script can be edited. Default output uses `YYYY-MM-DD_BCratio-HHMM.png`. The optional `--output /absolute/path/figure.png` overrides it. `plot_bc(..., output=None)` accepts an exact file path; an existing directory or suffix-free path retains the legacy directory behavior. The companion entry supplies `YYYY-MM-DD_BCratio_dimZ<N>.png` and checks collisions before plotting.
 
 ## pHefitting.py
 

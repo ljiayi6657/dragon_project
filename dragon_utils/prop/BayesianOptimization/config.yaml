@@ -45,5 +45,5 @@ local:
   phi:
     p: 0.64
     He: 0.64
-    BC: 0.62
+    BC: 0.64
   timeout: 7200

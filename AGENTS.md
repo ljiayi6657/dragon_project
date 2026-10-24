@@ -80,7 +80,7 @@
 ### Trigger C: B/C and p/He Comparison / Fitting
 
 * **B/C**: When the user requests B/C or BC ratio comparison / fitting (e.g., "对比BC ratio" or "BC fitting"), directly call `python3 /home/ljiayi/dragon_project/dragon_utils/plotting/BCfitting.py [source]`.
-  * Function: Sum boron and carbon isotope fluxes from DRAGON/DRAGON2 ASCII output, compare B/C with AMS-02, and plot B/C, Model/Data, and fractional residuals. This is a diagnostic comparison of unmodulated model LIS with observed TOA data.
+  * Function: Apply the existing fixed 0.64 GV solar modulation separately to B-10, B-11, C-12, C-13, and C-14, sum the isotope TOA fluxes by element, compare TOA B/C with AMS-02 TOA, and plot B/C, Model/Data, and fractional residuals. This is a diagnostic comparison and does not perform automatic parameter optimization.
 * **p/He**: When the user requests proton/helium or pHe comparison / fitting (e.g., "pHe对比" or "pHe fitting"), directly call `python3 /home/ljiayi/dragon_project/dragon_utils/plotting/pHefitting27.py [source]`.
   * Function: Apply the existing fixed solar modulation, compare proton and total helium (He-3 + He-4) TOA spectra and the equal-rigidity p/He ratio with AMS-02. Weight model flux, observations and uncertainties by R^2.7 in the first two panels for display; report raw unweighted chi-square for proton and helium separately. The p/He ratio remains unweighted and has no chi-square.
 * **Input**: `[source]` is an optional `.txt` spectrum path or directory. Prefer the user-specified or current-task spectrum; when omitted, both scripts select the latest `.txt` in `/home/ljiayi/dragon_project/data/dragon_output/`. Report the actual input file used.
@@ -109,7 +109,7 @@ Read and apply this section **only when the user explicitly mentions this resear
 | `scripts/xml_batch.py` | `from scripts.xml_batch import ModelSpec, prepare_models, file_hash, copy_baseline, save_state` | 本机手动准备输入和记录；库模块，无 CLI |
 | `dragon_utils/xml_manager/xml_modifier.py` | `load_xml/get_param` 只读；`modify_xml(template, params, output, diff)` 编辑 | 推荐 XML 接口；运行入口只读，物理参数编辑在用户检查之前 |
 | `dragon_utils/xml_manager/parameter_map.py` | 导入 `PARAM_MAP`、`NODE_MAP` | L、DimZ、核素链和其他参数 XPath；输出开关由节点存在性决定 |
-| `dragon_utils/plotting/BCfitting.py` | `python3 .../BCfitting.py <txt> --output <png>` | B/C 同位素和；未调制 LIS 与 TOA 诊断 |
+| `dragon_utils/plotting/BCfitting.py` | `python3 .../BCfitting.py <txt> --output <png>` | B-10/11、C-12/13/14 分别以固定 0.64 GV 调制后求和；TOA B/C 与 AMS-02 TOA 诊断；默认 `load_model()` 仍保留 LIS 比值供网格收敛复用 |
 | `dragon_utils/plotting/pHefitting.py` | `python3 .../pHefitting.py <txt> --output <png>` | 未加展示权重的调制后刚度谱；保留 Z 网格分析等依赖，不作为 companion 默认绘图 |
 | `dragon_utils/plotting/pHefitting27.py` | `python3 .../pHefitting27.py <txt> [--output <png>]`；默认 outputs/figures/YYYY-MM-DD_pHe27.png，companion 显式指定规范 pHe 图名 | companion 默认 R^2.7 展示版：模型、观测、误差棒一起加权；太阳调制、等刚度 He-3/4 求和、原始 χ² 与未加权 p/He 比值保持不变 |
 | `dragon_utils/data_processing/{flux,physics,statistic_analysis}.py` | 导入 `interp`、`SM_output`、`chisquare` | 推荐插值、调制和统计工具；保留既有单位/口径 |
