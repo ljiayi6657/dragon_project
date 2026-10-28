@@ -17,7 +17,7 @@
 
 ## 2. Directory Structure & File Paths
 
-* **Dragon Executable**: 本机 `/home/ljiayi/DRAGON2-Beta_version-master/DRAGON`；companion `/home/ljiayi/dragon/DRAGON2-Beta_version-master/DRAGON`，从各程序目录调用启动器。
+* **Dragon Executable**: 本机 `/home/ljiayi/DRAGON2-Beta_version-master/DRAGON`；companion 与 yellowgiant 均为 `/home/ljiayi/dragon/DRAGON2-Beta_version-master/DRAGON`，从各程序目录调用启动器。
 * **DRAGON Output Data (`.txt`, `.fits.gz`)**: `~/dragon_project/data/dragon_output/`
 * **Experiment data**: `~/dragon_project/data/experiment_data/`
 * **Processed Data**: `~/dragon_project/data/processed/`，包括输入/生成 XML 与同主体 `.source.param`。
@@ -37,6 +37,15 @@
 * **计算线程**：companion 当前构建为 48 个 OpenMP 线程。配置同时使用 `--with-numcpu=48` 与 `CPPFLAGS=-I<prefix>/include -DNUMTHREADS=48`，生成的 `NUMTHREADS`、`OMP_NUM_THREADS` 宏均为 48。修改计算线程数需在无运行中模型时重新配置、编译；不自动终止既有计算。`make -j4` 仅控制编译并行度。主机有 24 个物理核心、48 个逻辑 CPU。
 * **构建记录**：最新 CFITSIO 大 FITS 修复见 `outputs/workflow/2026-10-14_fits.json`，48 线程构建基础见 `outputs/workflow/2026-10-10_threads48.json`，完整构建/验证日志在 `logs/`；`2026-10-10_threads.json`、`2026-10-10_build.json` 分别保留历史 24、4 线程构建记录。24 线程运行记录另存 `outputs/workflow/2026-10-10_cpu24.json`，同一 XML 的 24/48 线程原生耗时比较见 `2026-10-10_speed.json`，不覆盖历史源码/程序哈希。
 * **FITS 库**：companion 的 CFITSIO 4.7.0 独立安装在 `/home/ljiayi/.local/dragon/cfitsio47/`，重建优先使用其 include/lib/rpath；原 `/home/ljiayi/.local/dragon/usr/` 保留旧库及当前 GSL。worker 的 LD_LIBRARY_PATH 包含新 CFITSIO 的 lib。旧 CFITSIO 4.0.0 的 gzip 写出可能将超过 4 GiB 的 fullstore 截断，不能回退后继续此类大文件计算；升级不恢复已有损坏文件。更换库后核验运行时链接、48 线程宏和物理源码哈希，使用无 DRAGON 模拟的 FITS 回归验证。
+
+### Yellowgiant Compute Host
+
+* **SSH Address**: `ljiayi@192.168.72.45`；SSH 别名为 `yellowgiant`，可用 `ssh yellowgiant` 连接。
+* **用途与硬件**：yellowgiant 用于预计峰值内存不超过约 128 GiB 的较小内存模拟。主机有 1 个 16 核 CPU、32 个逻辑 CPU，系统可见内存约 125 GiB；较大内存任务仍使用 companion。
+* **程序与目录**：DRAGON2 位于 `/home/ljiayi/dragon/DRAGON2-Beta_version-master/`；运行输入、日志与工作流目录分别为 `/home/ljiayi/dragon_project/data/processed/`、`/home/ljiayi/dragon_project/logs/`、`/home/ljiayi/dragon_project/outputs/workflow/`。`/home/ljiayi/dragon_calet/` 与 companion 保持同一配置/输入树；DRAGON 的 `output/DRAGON2_records/`、`output/tmux_logs/` 已建立，但不复制 companion 的历史模拟产物。
+* **计算线程**：yellowgiant 构建为 32 个 OpenMP 线程。配置同时使用 `--with-numcpu=32` 与 `CPPFLAGS=-I<prefix>/include -DNUMTHREADS=32`，生成的 `NUMTHREADS`、`OMP_NUM_THREADS` 宏均为 32。修改线程数前确认没有运行中的 DRAGON 模型；`make -j4` 仅控制编译并行度。
+* **构建依赖**：与 companion 使用相同用户级路径：CFITSIO 4.7.0 位于 `/home/ljiayi/.local/dragon/cfitsio47/`，GSL 位于 `/home/ljiayi/.local/dragon/usr/`。构建和运行时保留这些 include、lib 与 rpath，完成后核验动态链接、32 线程宏及物理源码哈希。
+* **当前部署**：2026-10-28 已部署 DRAGON2 提交 `7a66154`，包含 `DiffusionThresholdZ`；companion 与 yellowgiant 的关键物理源码哈希一致。当前 `scripts/run_companion.py` 仍只封装 companion 单轮工作流，未明确扩展入口前不要把 yellowgiant 当作该脚本的隐式默认主机。
 
 
 ## 3. Execution & Logging Rules

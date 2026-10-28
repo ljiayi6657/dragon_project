@@ -1,17 +1,33 @@
-"""Plot a diagnostic DRAGON2 B/C comparison with AMS-02 data."""
+"""Compare force-field-modulated DRAGON2 B/C with AMS-02 TOA data."""
 
 import argparse
 from datetime import datetime
 from pathlib import Path
+import sys
 from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 
+PHI_BC = 0.64
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from dragon_utils.data_processing.physics import SM_output
+
+
 DRAGON_OUT = "/home/ljiayi/dragon_project/data/dragon_output/"
 AMS_DATA = "/home/ljiayi/dragon_project/data/experiment_data/expdata/BCdata/AMS-BC-2016.dat"
 OUTPUT_DIR = "/home/ljiayi/dragon_project/outputs/figures/"
+MASS = 0.931494
+SPECIES = (
+    ("NUC_5010", 5, 10, "B"),
+    ("NUC_5011", 5, 11, "B"),
+    ("NUC_6012", 6, 12, "C"),
+    ("NUC_6013", 6, 13, "C"),
+    ("NUC_6014", 6, 14, "C"),
+)
 
 
 def load_model(source):
@@ -56,14 +72,10 @@ def load_model(source):
     if np.any(energy <= 0) or np.any(np.diff(energy) <= 0):
         raise ValueError(f"Invalid DRAGON2 energy grid: {path}")
 
-    flux = {name: data[:, keys.index(name) + 1] for name in needed}
-    if any(np.any(values < 0) for values in flux.values()):
-        raise ValueError(f"Negative B/C isotope flux: {path}")
-    boron = flux["NUC_5010"] + flux["NUC_5011"]
-    carbon = flux["NUC_6012"] + flux["NUC_6013"] + flux["NUC_6014"]
-    if np.any(carbon <= 0):
-        raise ValueError(f"Zero carbon flux: {path}")
-    return path, energy, boron / carbon
+    flux = {name: data[:, keys.index(name) + 1] / 10000 for name in needed}
+    if any(np.any(values <= 0) for values in flux.values()):
+        raise ValueError(f"Nonpositive B/C isotope flux: {path}")
+    return path, energy, flux
 
 
 def load_ams(path):
@@ -89,24 +101,52 @@ def load_ams(path):
     return energy, data[:, 2], error
 
 
-def plot_bc(energy, model, obsx, obs, error, output=None):
-    keep = (obsx >= energy[0]) & (obsx <= energy[-1])
+def plot_bc(energy, flux, obsx, obs, error, output=None):
+    keep = np.ones(obsx.size, dtype=bool)
+    for _, charge, massnum, _ in SPECIES:
+        shifted = obsx + abs(charge) * PHI_BC / massnum
+        keep &= (shifted >= energy[0]) & (shifted <= energy[-1])
     skipped = np.count_nonzero(~keep)
-    if skipped:
-        print(f"Skipped {skipped} AMS-02 points outside the DRAGON2 energy range.")
+    print(f"B/C: Phi = {PHI_BC:.6g} GV; used {np.count_nonzero(keep)}/{obsx.size}; "
+          f"excluded {skipped} observations outside shifted LIS coverage")
     if not np.any(keep):
         raise ValueError("DRAGON2 and AMS-02 energy ranges do not overlap")
 
-    # Both horizontal axes are kinetic energy per nucleon in GeV/n.
-    matched = np.interp(obsx[keep], energy, model)
+    grid = energy.copy()
+    for _, charge, massnum, _ in SPECIES:
+        shifted = grid + abs(charge) * PHI_BC / massnum
+        grid = grid[(shifted >= energy[0]) & (shifted <= energy[-1])]
+    if grid.size < 2:
+        raise ValueError("Insufficient shifted LIS coverage for B/C")
+
+    bgrid = np.zeros(grid.size)
+    cgrid = np.zeros(grid.size)
+    bfit = np.zeros(np.count_nonzero(keep))
+    cfit = np.zeros(np.count_nonzero(keep))
+    for name, charge, massnum, group in SPECIES:
+        _, curve = SM_output(energy, flux[name], PhiP=PHI_BC, Mass=MASS,
+                             output_energies=grid, charge=charge, massnum=massnum)
+        _, points = SM_output(energy, flux[name], PhiP=PHI_BC, Mass=MASS,
+                              output_energies=obsx[keep], charge=charge,
+                              massnum=massnum)
+        if group == "B":
+            bgrid += curve
+            bfit += points
+        else:
+            cgrid += curve
+            cfit += points
+    if np.any(cgrid <= 0) or np.any(cfit <= 0):
+        raise ValueError("Nonpositive modulated carbon flux")
+    model = bgrid / cgrid
+    matched = bfit / cfit
     quotient = matched / obs[keep]
     residual = quotient - 1.0
 
     fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 9))
-    axes[0].plot(energy, model, label="DRAGON2 (LIS)")
+    axes[0].plot(grid, model, label=rf"DRAGON2 TOA ($\phi={PHI_BC:.2f}$ GV)")
     axes[0].errorbar(obsx, obs, yerr=error, fmt="o", markersize=3, capsize=2,
                      label="AMS-02 (TOA)")
-    axes[0].set_title("B/C comparison: unmodulated model and AMS-02")
+    axes[0].set_title("B/C comparison: force-field-modulated model and AMS-02")
     axes[0].set_ylabel("B/C Ratio")
     axes[0].legend()
 
@@ -141,13 +181,14 @@ def main():
     parser.add_argument("--output", help="Exact figure path")
     args = parser.parse_args()
     try:
-        path, energy, model = load_model(args.dragon)
+        path, energy, flux = load_model(args.dragon)
         obsx, obs, error = load_ams(AMS_DATA)
-        target = plot_bc(energy, model, obsx, obs, error, args.output)
+        target = plot_bc(energy, flux, obsx, obs, error, args.output)
     except (ValueError, OSError) as exc:
         parser.exit(1, f"Error: {exc}\n")
     print(f"DRAGON2 spectrum: {path}")
-    print("Note: DRAGON2 LIS is compared with AMS-02 TOA; this is diagnostic only.")
+    print(f"Solar modulation: force-field Phi = {PHI_BC:.6g} GV.")
+    print("DRAGON2 TOA B/C is compared with AMS-02 TOA.")
     print(f"Saved figure: {target.resolve()}")
 
 
