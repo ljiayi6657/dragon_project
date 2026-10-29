@@ -19,6 +19,7 @@ from dragon_utils.data_processing.statistic_analysis import chisquare, fit_const
 PHI_P = 0.64
 PHI_HE = 0.64
 FIT_MIN = 10.0
+PLOT_MIN = 5.0
 SCAN_SCALE = (0.98, 0.99, 0.995, 1.005, 1.01, 1.02)
 DRAGON_OUT = ROOT / "data/dragon_output"
 AMS_DIR = ROOT / "data/experiment_data/expdata/nucdata"
@@ -218,26 +219,32 @@ def plot_flux(energy, flux, output=None, fit=False, fit_min=FIT_MIN):
             bounds.append((massnum / charge * np.sqrt(low * (low + 2 * mass)),
                            massnum / charge * np.sqrt(high * (high + 2 * mass))))
         limits.extend(bounds)
-        lo = max(max(item[0] for item in bounds), points[0] / 1.5)
+        lo = max(max(item[0] for item in bounds), points[0] / 1.5,
+                 np.nextafter(PLOT_MIN, np.inf))
         hi = min(min(item[1] for item in bounds), points[-1] * 1.5)
         grid = np.geomspace(lo, hi, 500)
         grid = grid[coverage(energy, grid, mode, phi)]
         # Weight spectra and uncertainties only for display.
         weight = points**2.7
+        show = keep & (points > PLOT_MIN)
         ax.plot(grid, scale * rigidity(energy, flux, grid, mode, phi) * grid**2.7,
                 label="DRAGON2 TOA fit" if fit else "DRAGON2 TOA")
-        ax.errorbar(points[keep], obs[keep] * weight[keep],
-                    yerr=error[keep] * weight[keep], fmt="o",
+        ax.errorbar(points[show], obs[show] * weight[show],
+                    yerr=error[show] * weight[show], fmt="o",
                     markersize=3, capsize=2, label="AMS-02 TOA")
         if excluded:
-            ax.errorbar(points[~keep], obs[~keep] * weight[~keep],
-                        yerr=error[~keep] * weight[~keep], fmt="x",
-                        color="gray", markersize=3, label="AMS-02 outside coverage")
+            outside = ~keep & (points > PLOT_MIN)
+            if np.any(outside):
+                ax.errorbar(points[outside], obs[outside] * weight[outside],
+                            yerr=error[outside] * weight[outside], fmt="x",
+                            color="gray", markersize=3,
+                            label="AMS-02 outside coverage")
         ax.set_title("Proton" if mode == "p" else "Helium (He-3 + He-4)")
         ax.set_xlabel("Rigidity [GV]")
         ax.set_ylabel(r"$R^{2.7}$ Flux [cm$^{-2}$ s$^{-1}$ sr$^{-1}$ GV$^{1.7}$]")
         ax.set_xscale("log")
         ax.set_yscale("log")
+        ax.set_xlim(left=PLOT_MIN)
         if fit:
             symbol = r"C_p" if mode == "p" else r"C_{\rm He}"
             note = (rf"${symbol} = {scale:.5g}$" + "\n" +
@@ -255,7 +262,8 @@ def plot_flux(energy, flux, output=None, fit=False, fit_min=FIT_MIN):
           "outside shifted LIS coverage; no chi-square calculated")
     if used == 0:
         raise ValueError("No AMS-02 p/He observations within shifted LIS coverage")
-    lo = max(max(item[0] for item in limits), points[0] / 1.5)
+    lo = max(max(item[0] for item in limits), points[0] / 1.5,
+             np.nextafter(PLOT_MIN, np.inf))
     hi = min(min(item[1] for item in limits), points[-1] * 1.5)
     grid = np.geomspace(lo, hi, 500)
     grid = grid[coverage(energy, grid, "p", PHI_P) & coverage(energy, grid, "He", PHI_HE)]
@@ -270,15 +278,20 @@ def plot_flux(energy, flux, output=None, fit=False, fit_min=FIT_MIN):
     if not np.all(np.isfinite(ratio)) or np.any(ratio <= 0):
         raise ValueError("Invalid TOA p/He ratio")
     axes[2].plot(grid, ratio, label="DRAGON2 TOA fit" if fit else "DRAGON2 TOA")
-    axes[2].errorbar(points[keep], obs[keep], yerr=error[keep], fmt="o",
+    show = keep & (points > PLOT_MIN)
+    axes[2].errorbar(points[show], obs[show], yerr=error[show], fmt="o",
                     markersize=3, capsize=2, label="AMS-02 TOA")
     if excluded:
-        axes[2].errorbar(points[~keep], obs[~keep], yerr=error[~keep], fmt="x",
-                        color="gray", markersize=3, label="AMS-02 outside coverage")
+        outside = ~keep & (points > PLOT_MIN)
+        if np.any(outside):
+            axes[2].errorbar(points[outside], obs[outside], yerr=error[outside], fmt="x",
+                             color="gray", markersize=3,
+                             label="AMS-02 outside coverage")
     axes[2].set_title("Proton / Helium at equal rigidity")
     axes[2].set_xlabel("Rigidity [GV]")
     axes[2].set_ylabel("p/He")
     axes[2].set_xscale("log")
+    axes[2].set_xlim(left=PLOT_MIN)
     if fit:
         note = (rf"$C_p = {c_p:.5g}$, $C_{{\rm He}} = {c_he:.5g}$" + "\n" +
                 rf"$C_p/C_{{\rm He}} = {c_p / c_he:.5g}$")
