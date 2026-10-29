@@ -1,50 +1,44 @@
 # dragon_project
 
-面向宇宙线传播研究的 DRAGON2 工作流仓库。项目围绕空间依赖扩散指数的 3D DRAGON2 模型，组织输入配置、单轮远端计算、结果回传、AMS-02 对比、p/He 通量归一化拟合以及 Z 网格收敛分析。
+[English](README.md) | [中文](README_cn.md)
 
-本仓库主要保存 Python 工具和工作流代码，**不包含 DRAGON2 源码或可执行文件，也不版本化实验数据、模拟输出、日志和生成图片**。
+A DRAGON2 workflow repository for cosmic-ray propagation research. The project organizes input configuration, single-run remote execution, result retrieval, AMS-02 comparisons, p/He flux-normalization fitting, and vertical-grid convergence analysis for a 3D DRAGON2 model with a spatially dependent diffusion index.
 
-## 工作流概览
+This repository primarily contains Python utilities and workflow code. It **does not include the DRAGON2 source code or executable, and it does not version experimental data, simulation outputs, logs, or generated figures**.
+
+## Workflow overview
 
 ```mermaid
 flowchart LR
-    A[检查 XML 与源丰度] --> B[本机预览]
-    B --> C[companion 运行 DRAGON2]
-    C --> D[回传 TXT / FITS / 日志]
-    D --> E[B/C 与 p/He 对比]
-    D --> F[Z 网格收敛分析]
-    E --> G[χ²、残差与归一化常数]
+    A[Review XML and source abundances] --> B[Local preview]
+    B --> C[Run DRAGON2 on companion]
+    C --> D[Retrieve TXT / FITS / logs]
+    D --> E[B/C and p/He comparisons]
+    D --> F[Vertical-grid convergence]
+    E --> G[χ², residuals, and flux constants]
 ```
 
-当前推荐入口包括：
+Recommended entry points:
 
-- `scripts/run_companion.py`：一次模拟、回传、校验及 B/C、p/He 绘图。
-- `dragon_utils/plotting/BCfitting.py`：DRAGON2 B/C 与 AMS-02 的 TOA 诊断对比。
-- `dragon_utils/plotting/pHefitting27.py`：质子、氦和等刚度 p/He 对比，可选通量归一化拟合。
-- `scripts/zgrid_convergence.py`：基于已有 TXT 的离线 Z 网格收敛比较。
-- `dragon_utils/xml_manager/`：XML 参数读取和修改接口。
+- `scripts/run_companion.py`: run one simulation, retrieve and validate its results, and generate B/C and p/He figures.
+- `dragon_utils/plotting/BCfitting.py`: diagnostic TOA comparison of DRAGON2 B/C with AMS-02.
+- `dragon_utils/plotting/pHefitting27.py`: proton, helium, and equal-rigidity p/He comparison with optional flux-normalization fitting.
+- `scripts/zgrid_convergence.py`: offline vertical-grid convergence analysis using existing TXT spectra.
+- `dragon_utils/xml_manager/`: XML parameter reading and modification interfaces.
 
-`dragon_utils/prop/` 保留贝叶斯优化、梯度下降、Markov Chain、神经网络等研究原型。其中部分代码仍依赖历史路径或外部环境，不应替代上述推荐入口。
+`dragon_utils/prop/` retains research prototypes for Bayesian optimization, gradient descent, Markov chains, and neural networks. Some of this code still depends on historical paths or external environments and should not replace the recommended entry points above.
 
-## 环境要求
+## Requirements
 
-基础分析环境：
+Base analysis environment:
 
 - Python 3.10+
-- NumPy
-- SciPy
-- Matplotlib
-- lxml
-- Astropy（FITS 校验和 companion 工作流）
+- NumPy, SciPy, Matplotlib, and lxml
+- Astropy for FITS validation and the companion workflow
 
-companion 工作流另外需要：
+The companion workflow additionally requires a working DRAGON2 executable, SSH, rsync, tmux, configured remote paths, and Python 3.9+ on the remote host.
 
-- 可用的 DRAGON2 程序及运行依赖
-- SSH、rsync、tmux
-- 已配置的 companion 主机与远端路径
-- 远端 Python 3.9+
-
-仓库目前不是可直接安装的 Python package，建议从项目根目录运行脚本：
+The repository is not currently packaged for direct installation. Run scripts from the project root:
 
 ```bash
 cd /path/to/dragon_project
@@ -53,81 +47,69 @@ source .venv/bin/activate
 python3 -m pip install numpy scipy matplotlib lxml astropy
 ```
 
-运行前需要自行准备以下本地目录和数据：
+Prepare the following local directories and data before running the workflows:
 
 ```text
-data/experiment_data/   AMS-02 等实验数据
-data/processed/         已检查的 XML 与同名 .source.param
-data/dragon_output/     DRAGON2 TXT/FITS 输出
-outputs/figures/        图片
-outputs/csv/            表格
-outputs/workflow/       状态、哈希和任务记录
-logs/                   命令与运行日志
+data/experiment_data/   AMS-02 and other experimental data
+data/processed/         Reviewed XML files and matching .source.param files
+data/dragon_output/     DRAGON2 TXT/FITS outputs
+outputs/figures/        Figures
+outputs/csv/            Tables
+outputs/workflow/       State, hashes, and run records
+logs/                   Command and DRAGON2 logs
 ```
 
-这些目录已在 `.gitignore` 中排除，不会随 Git clone 自动获得。
+These directories are excluded by `.gitignore` and are not created or populated by cloning the repository.
 
-## 快速使用
+## Quick start
 
-### 1. 使用已有 DRAGON2 TXT 绘图
-
-B/C：
+### Plot an existing DRAGON2 TXT spectrum
 
 ```bash
+# B/C
 python3 dragon_utils/plotting/BCfitting.py \
     data/dragon_output/model.txt \
     --output outputs/figures/YYYY-MM-DD_BC.png
-```
 
-p/He 诊断图：
-
-```bash
+# p/He diagnostic figure
 python3 dragon_utils/plotting/pHefitting27.py \
     data/dragon_output/model.txt \
     --output outputs/figures/YYYY-MM-DD_pHe.png
-```
 
-p/He 通量归一化拟合：
-
-```bash
+# p/He flux-normalization fit
 python3 dragon_utils/plotting/pHefitting27.py \
     data/dragon_output/model.txt \
     --fit \
     --output outputs/figures/YYYY-MM-DD_pHefit.png
 ```
 
-当前 p/He 拟合默认使用刚度中心 `R >= 10 GV` 的 AMS-02 点，三个面板只显示 `R > 5 GV`。`--fit-min <GV>` 可以修改拟合阈值。质子和氦分别拟合正的后处理常数 `C_p`、`C_He`；这些常数不会修改 XML、源丰度或传播参数。
+The current p/He fit uses AMS-02 points with rigidity-bin centers `R >= 10 GV` by default, while all three panels display only `R > 5 GV`. Use `--fit-min <GV>` to change the fit threshold. Positive post-processing constants `C_p` and `C_He` are fitted independently for proton and helium; they do not modify the XML, source abundances, or propagation parameters.
 
-### 2. 预览并运行一轮 companion 计算
+### Preview and run one companion calculation
 
-先检查 XML，再执行无写入预览：
+Review the XML first, then run a no-write preview:
 
 ```bash
 python3 scripts/run_companion.py run /absolute/path/model.xml --preview
 ```
 
-确认计划、DimZ、源丰度来源和输出清单后再启动：
+After confirming the plan, DimZ, source-abundance origin, and expected outputs, start the run:
 
 ```bash
 python3 scripts/run_companion.py run /absolute/path/model.xml
 ```
 
-入口会规范化本轮 XML 和源丰度文件名，上传到 companion，运行一次 DRAGON2，回传所启用的 TXT/FITS 和日志，并生成 B/C 与 p/He 两张诊断图。它不会自动修改物理参数或继续提交下一轮。
+The entry point gives the XML and source-abundance file canonical names, uploads them to the companion host, runs DRAGON2 once, retrieves enabled TXT/FITS outputs and logs, and creates B/C and p/He diagnostic figures. It does not change physical parameters or submit another run automatically.
 
-SSH 中断后不要盲目重跑。使用本轮主体查询和恢复：
+Do not blindly rerun after an SSH interruption. Query and recover the same run by its stem:
 
 ```bash
 python3 scripts/run_companion.py fetch YYYY-MM-DD_dimZ81
 python3 scripts/run_companion.py plot YYYY-MM-DD_dimZ81
-```
-
-首次查看实时远端日志：
-
-```bash
 tmux attach -t dragon_log
 ```
 
-### 3. 分析 Z 网格收敛
+### Analyze vertical-grid convergence
 
 ```bash
 python3 scripts/zgrid_convergence.py \
@@ -136,40 +118,37 @@ python3 scripts/zgrid_convergence.py \
     --points 200
 ```
 
-该脚本只读取已有 TXT，不运行 DRAGON2。它比较相邻 DimZ 以及最大 DimZ 参考下的 B/C、质子和总氦最大相对差异，不自动给出收敛判定。
+This script reads existing TXT spectra and does not run DRAGON2. It compares the maximum relative differences in B/C, proton flux, and total helium flux between adjacent DimZ values and against the largest-DimZ reference. It does not make an automatic convergence decision.
 
-## 物理与统计口径
+## Physics and statistics conventions
 
-- DRAGON2 ASCII 谱被视为未调制 LIS，AMS-02 数据被视为 TOA。
-- 太阳调制复用 `dragon_utils.data_processing.physics.SM_output`，默认质子、氦和当前 B/C 绘图势均为 0.64 GV。
-- 质子通量为 `Sec_p + Pri_p`。
-- He-3 和 He-4 分别调制并分别转换为刚度通量，之后再求和。
-- 默认对角卡方为 `chi2 = sum(((observed-model)/sigma)^2)`，其中 `sigma = sqrt(stat^2+syst^2)`；总系统误差不与其分项重复相加。
-- p/He 的 `C_p`、`C_He` 是现有 TOA 输出的整体乘法常数，不应解释为重新拟合的源丰度。
-- 固定 force-field 势、几何能箱中心和对角误差近似均有局限；低能区和相关系统误差需要单独评估。
+- DRAGON2 ASCII spectra are treated as unmodulated local interstellar spectra, while AMS-02 data are treated as top-of-atmosphere observations.
+- Solar modulation reuses `dragon_utils.data_processing.physics.SM_output`. The current plotting potentials for proton, helium, and B/C are 0.64 GV.
+- Proton flux is `Sec_p + Pri_p`; He-3 and He-4 are modulated and converted to rigidity flux separately before summation.
+- The default diagonal statistic is `chi2 = sum(((observed-model)/sigma)^2)`, with `sigma = sqrt(stat^2+syst^2)`. The total systematic uncertainty is not added again to its components.
+- The p/He constants `C_p` and `C_He` multiply existing TOA outputs and must not be interpreted as newly fitted source abundances.
+- Fixed force-field potentials, geometric bin centers, and diagonal uncertainties are approximations. Low-energy behavior and correlated systematics require separate assessment.
 
-## 目录结构
+## Repository layout
 
-| 路径 | 用途 |
+| Path | Purpose |
 | --- | --- |
-| `scripts/` | 单轮 companion、XML 批量准备和 Z 网格分析入口 |
-| `dragon_utils/data_processing/` | 插值、太阳调制、卡方和通量常数拟合 |
-| `dragon_utils/plotting/` | B/C、质子、氦与 p/He 绘图 |
-| `dragon_utils/xml_manager/` | XML 参数映射、读取和修改 |
-| `dragon_utils/dragonio/` | DRAGON 数据读取工具 |
-| `dragon_utils/prop/` | 优化、代理模型和历史研究原型 |
-| `data/processed/` | 规范 XML 和 `.source.param` |
-| `data/dragon_output/` | DRAGON2 TXT 与 FITS |
-| `data/experiment_data/` | 本地实验数据 |
-| `outputs/figures/` | 正式图片 |
-| `outputs/csv/` | CSV 结果 |
-| `outputs/workflow/` | 状态、哈希和运行清单 |
-| `logs/` | 命令及 DRAGON2 日志 |
-| `docs/` | 任务 prompts、notes 和研究记录 |
+| `scripts/` | Companion run, XML batch preparation, and vertical-grid analysis entry points |
+| `dragon_utils/data_processing/` | Interpolation, solar modulation, chi-square, and flux-constant fitting |
+| `dragon_utils/plotting/` | B/C, proton, helium, and p/He plotting |
+| `dragon_utils/xml_manager/` | XML parameter mapping, reading, and modification |
+| `dragon_utils/dragonio/` | DRAGON data readers |
+| `dragon_utils/prop/` | Optimization, surrogate-model, and historical research prototypes |
+| `data/processed/` | Canonical XML and `.source.param` inputs |
+| `data/dragon_output/` | DRAGON2 TXT and FITS outputs |
+| `data/experiment_data/` | Local experimental data |
+| `outputs/` | Figures, CSV results, state, and run manifests |
+| `logs/` | Command and DRAGON2 logs |
+| `docs/` | Task prompts, notes, and research records |
 
-## 输出与可复现性
+## Outputs and reproducibility
 
-companion 单轮主体使用 `YYYY-MM-DD_dimZ<N>`，日期按 Asia/Tokyo 固定。典型产物为：
+A companion run uses the stem `YYYY-MM-DD_dimZ<N>`, with the date fixed in the Asia/Tokyo time zone. Typical products are:
 
 ```text
 data/processed/<stem>.xml
@@ -183,16 +162,17 @@ outputs/workflow/<stem>.json
 logs/YYYY-MM-DD_HH-MM-SS.md
 ```
 
-工作流使用退出码、输出清单、文件长度和 SHA256 判定完成状态。DRAGON2 或传输失败不会使用旧输出代替本轮结果。实验 χ² 的改善也不等同于空间网格已经收敛。
+The workflow uses process exit codes, expected-output manifests, file sizes, and SHA256 hashes to determine completion. A failed DRAGON2 run or transfer does not substitute an older result for the current run. An improved experimental chi-square also does not establish numerical grid convergence.
 
-## 更多文档
+## Further documentation
 
-- [项目规则与入口说明](AGENTS.md)
-- [研究目标与任务表](tasks_cn.md)
-- [脚本详细说明](scripts/README.md)
-- [绘图与拟合说明](dragon_utils/plotting/readme.md)
-- [数据处理接口](dragon_utils/data_processing/README.md)
-- [XML 工具](dragon_utils/xml_manager/README.md)
-- [传播与优化原型](dragon_utils/prop/README.md)
+- [Project rules and entry points](AGENTS.md)
+- [Research goals and task table, Chinese](tasks_cn.md)
+- [Research goals and task table, English](tasks_en.md)
+- [Script documentation](scripts/README.md)
+- [Plotting and fitting](dragon_utils/plotting/readme.md)
+- [Data-processing interfaces](dragon_utils/data_processing/README.md)
+- [XML utilities](dragon_utils/xml_manager/README.md)
+- [Propagation and optimization prototypes](dragon_utils/prop/README.md)
 
-这是研究代码仓库。运行新的 DRAGON2 模型前应人工检查 XML、源丰度、核素范围、输出开关和数值设置，并保留对应输入、日志与哈希记录。
+This is a research-code repository. Before starting a new DRAGON2 model, review the XML, source abundances, nuclear-chain range, output switches, and numerical settings, and retain the corresponding inputs, logs, and hashes.
