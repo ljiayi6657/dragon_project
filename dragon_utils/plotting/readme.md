@@ -80,4 +80,20 @@ companion 默认使用的 p/He 展示版本，CLI `python3 /home/ljiayi/dragon_p
 
 默认图片为 `outputs/figures/YYYY-MM-DD_pHe27.png`（Asia/Tokyo，同日覆盖）；`--output` 覆盖默认路径。companion 显式传入原有规范名称 `YYYY-MM-DD_pHe_dimZ<N>.png`，在 figures/ 直属临时 PNG 完成后原子替换并记录哈希。生成图不会运行 DRAGON、不修改 TXT/FITS/XML；历史未加权图可使用其对应原始 TXT 加精确 `--output` 重画。未经加权的 `pHefitting.py` 和 CSV 收敛分析的数值不随此展示切换改变。
 
+### Optional flux-normalization fit
+
+Append `--fit` to fit independent positive post-processing constants `C_p` and `C_He`. The fitted models are `C_p` times the complete proton TOA flux and `C_He` times the sum of the separately modulated He-3 and He-4 TOA rigidity fluxes. These constants do not change the XML, `ProtNormFlux`, source abundances, propagation parameters, or the He-3/He-4 ratio. The fitted p/He curve therefore gains the factor `C_p/C_He`.
+
+The default fitting range is bin-center rigidity `R >= 10 GV`; change it with `--fit-min GV`, including `--fit-min 0` for all covered points. All covered AMS-02 points remain visible with one common marker and legend style; the threshold annotation identifies the fitted range, while coverage exclusions retain crosses. For each species the code minimizes the existing raw diagonal statistic `sum(((observed-C*model)/sigma)^2)` analytically, then evaluates six nearby constants at factors 0.98, 0.99, 0.995, 1.005, 1.01, and 1.02. A scanned constant is adopted only when its raw chi-square is lower than the analytic result; every candidate, the analytic result, the adopted source, N, dof=N-1, and reduced chi-square are printed.
+
+The proton and helium panels annotate the adopted constant, raw fit chi-square, reduced chi-square, threshold, and modulation potential. The p/He panel annotates `C_p`, `C_He`, and their ratio without adding a ratio chi-square. The default fitted filename is `outputs/figures/YYYY-MM-DD_pHefit.png`; explicit `--output` still takes precedence. `plot_flux(energy, flux, output=None, fit=False, fit_min=10.0)` returns the adopted constant, analytic value, scan candidates, fit counts, and chi-square details inside `results`. The reusable scalar fitter is `data_processing.statistic_analysis.fit_constant`.
+
+```bash
+python3 dragon_utils/plotting/pHefitting27.py /path/to/spectrum.txt --fit
+python3 dragon_utils/plotting/pHefitting27.py /path/to/spectrum.txt --fit --fit-min 0
+python3 dragon_utils/plotting/pHefitting27.py /path/to/spectrum.txt --fit --fit-min 10 --output /absolute/path/fit.png
+```
+
+The companion runner does not add `--fit`, so its standard p/He plot remains the unscaled diagnostic unless a separate explicit fit command is requested. Fixed force-field potentials, diagonal errors, and bin-center evaluation retain the limitations described above; a fitted normalization cannot repair a spectral-shape mismatch and must not be interpreted as a fitted source abundance.
+
 2026-10-14 已按各自原始 TXT 覆盖 25 张未加权历史图，保留原文件名；两张已加权的历史图保持原样。覆盖清单、输入与图片前后哈希、统计结果及历史实验缩放记录在 `outputs/workflow/2026-10-14_pHe.json`，对应运行日志路径也在清单中。18 份 companion 状态及原有氦缩放实验记录已更新图片哈希。早期临时 He-3×3、He-4×4 实验图保留原实验缩放并标注 scaled He；其他历史图使用各自原始谱，不借用最新模拟结果。

@@ -38,17 +38,20 @@ energy, toa = SM_output([1, 2, 4], [3, 2, 1], output_energies=[1], charge=1, mas
 
 ## statistic_analysis.py
 
-chisquare 支持对角误差或协方差，dof 可给约化 χ²，return_points 可返回贡献/残差等细节。
+chisquare 支持对角误差或协方差，dof 可给约化 χ²，return_points 可返回贡献/残差等细节。fit_constant 对正观测、正模型和正对称误差拟合一个正乘法常数；先计算加权最小二乘解析解，再可按调用方给定的相对尺度扫描邻域，只有扫描 χ² 更低时才采用扫描值。
 
-输入输出与限制：输入匹配形状的观测/期望/误差，输出原始 χ²、指定 dof 下的约化值或细节字典。协方差必须正定且与误差一致；本流程不改变统计口径。
+输入输出与限制：chisquare 输入匹配形状的观测/期望/误差，输出原始 χ²、指定 dof 下的约化值或细节字典；协方差必须正定且与误差一致。fit_constant 输入匹配的一维观测、未缩放模型、对称误差及可选正扫描尺度，返回采用的 constant/chi2/source、解析值及全部扫描结果；不支持非对角协方差或非正输入，不写文件。
 
 示例（历史/实验代码须先修正依赖与路径，不在本任务中执行）：
 
 ```python
 from dragon_utils.data_processing.statistic_analysis import chisquare
 value = chisquare([1, 2], [1, 2], [0.1, 0.2])
+
+from dragon_utils.data_processing.statistic_analysis import fit_constant
+result = fit_constant([2, 4], [1, 2], [0.1, 0.2], [0.99, 1.01])
 ```
 
-主要接口：`chisquare`。
+主要接口：`chisquare`, `fit_constant`。
 
 实际导入：`numpy`。
