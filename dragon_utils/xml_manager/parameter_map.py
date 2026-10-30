@@ -29,6 +29,7 @@ PARAM_MAP = {
     "Delta": "//Galaxy/Diffusion/Delta",
     "VariableDelta": "//Galaxy/Diffusion/VariableDelta",
     "DiffusionThreshold": "//Galaxy/Diffusion/DiffusionThreshold",
+    "DiffusionThresholdZ": "//Galaxy/Diffusion/DiffusionThresholdZ",
     "deltaA": "//Galaxy/Diffusion/deltaA",
     "deltaB": "//Galaxy/Diffusion/deltaB",
     "deltaZ": "//Galaxy/Diffusion/deltaZ",

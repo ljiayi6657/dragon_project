@@ -26,7 +26,7 @@ flowchart LR
 - `scripts/zgrid_convergence.py`：基于已有 TXT 的离线 Z 网格收敛比较。
 - `dragon_utils/xml_manager/`：XML 参数读取和修改接口。
 
-`dragon_utils/prop/` 保留贝叶斯优化、梯度下降、Markov Chain、神经网络等研究原型。其中部分代码仍依赖历史路径或外部环境，不应替代上述推荐入口。
+`dragon_utils/prop/BayesianOptimization/BayesOpt.py` 是当前 companion/yellowgiant 严格同步的四参数搜索入口；所需范围、Z=8 到 Z=14 修正、输出和测试模式见该目录 README。`dragon_utils/prop/` 的其他区域仍是可能依赖历史路径或外部环境的研究原型。
 
 ## 环境要求
 

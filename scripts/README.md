@@ -78,6 +78,8 @@ ASCII 与 FITS 可以在同一轮同时生成和回传。XML 的 `<Output>` 下�
 
 远端固定地址 `ljiayi@192.168.72.54`，输入同本机 `data/processed/` 路径，程序目录 `/home/ljiayi/dragon/DRAGON2-Beta_version-master/`，从该目录调用 `DRAGON` 启动器。运行 worker 是通过 SSH 传入的标准库 Python 代码，不部署常驻队列或新的远端脚本。它脱离 SSH 会话，原子记录任务状态、PID/进程起始标识/主机 boot ID、输入及源码（含 cparamlib C 源文件）/程序/共享库 SHA256、开始结束时间、真实退出码、原生与归档文件对应关系。
 
+`rpc(..., host=...)` 可由 BayesianOptimization 复用同一 worker 协议连接其他已配置主机；单轮 CLI 仍默认且仅面向 companion。Bayes 模式保留上传 XML 的实际 DimZ、一致哈希和同名丰度校验，但允许参数化候选主体，不套用单轮 `YYYY-MM-DD_dimZ<N>` 限制。
+
 完成条件是进程退出码为零且 XML 开启的各输出非空。取回暂存文件后核对 SHA256 与长度，复用两个绘图 reader 检查 ASCII 列、能量轴与通量，并解析所有 FITS HDU、读取 gzip 至末尾检查完整性，然后归档。不根据文件出现或大小稳定判断成功。失败也取回可取得的完整运行日志；作图失败保留原始数据及 `plotFailed` 状态，可以 `plot <stem>` 重做。图片先在 figures/ 直属临时 PNG 文件中生成，再替换正式路径并清理临时文件，不创建图片子目录。
 
 远端计算成功后仍需完成回传与作图。若在回传/校验阶段中断，本轮数据和图片尚未落盘，目录中可能仍只有上一轮图片；这些旧文件不能作为本轮结果。对已成功完成的同一轮用 `fetch <stem>` 重新取回完整数据，再用 `plot <stem>` 生成本轮图片，无需重算。

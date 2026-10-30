@@ -26,7 +26,7 @@ Recommended entry points:
 - `scripts/zgrid_convergence.py`: offline vertical-grid convergence analysis using existing TXT spectra.
 - `dragon_utils/xml_manager/`: XML parameter reading and modification interfaces.
 
-`dragon_utils/prop/` retains research prototypes for Bayesian optimization, gradient descent, Markov chains, and neural networks. Some of this code still depends on historical paths or external environments and should not replace the recommended entry points above.
+`dragon_utils/prop/BayesianOptimization/BayesOpt.py` is the active synchronous companion/yellowgiant four-parameter search entry point; its directory README documents the required bounds, Z=8 to Z=14 correction, outputs, and test mode. The other `dragon_utils/prop/` areas remain research prototypes that may depend on historical paths or external environments.
 
 ## Requirements
 

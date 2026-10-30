@@ -50,7 +50,7 @@ result = modify_xml(
 
 ## parameter_map.py
 
-库模块，无 CLI；`from dragon_utils.xml_manager.parameter_map import PARAM_MAP, NODE_MAP`。输入为公开参数名，输出为 XPath 映射；L、DimZ、Zmin/Zmax、能量轴及注入/扩散参数通过 value 属性查询。可移除节点只列在 NODE_MAP。无外部依赖，不生成文件；未登记参数会由 xml_modifier 报错。fullstore/partialstore 和 DimZ_division 属于节点存在性/points 语义，单轮入口直接读取，不伪装为 value 参数。
+库模块，无 CLI；`from dragon_utils.xml_manager.parameter_map import PARAM_MAP, NODE_MAP`。输入为公开参数名，输出为 XPath 映射；L、DimZ、Zmin/Zmax、能量轴及注入/扩散参数通过 value 属性查询，其中 `DiffusionThresholdZ` 映射到 3D VariableDelta 的垂直阈值。当前基准 XML 将其设为 0，表示不截断垂直项。可移除节点只列在 NODE_MAP。无外部依赖，不生成文件；未登记参数会由 xml_modifier 报错。fullstore/partialstore 和 DimZ_division 属于节点存在性/points 语义，单轮入口直接读取，不伪装为 value 参数。
 
 ## xml_modifier.py
 

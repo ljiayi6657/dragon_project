@@ -49,7 +49,7 @@ if op == 'reserve':
     history = [str(directory / name) for name in names if (directory / name).exists()]
     pathlib.Path(spec['remoteLog']).parent.mkdir(parents=True, exist_ok=True)
     with open(spec['remoteLog'], 'x') as stream:
-        stream.write('# Companion single run\n')
+        stream.write('# DRAGON2 remote run\n')
     state = dict(spec, status='prepared', history=history)
     for item in spec['inputs']:
         pathlib.Path(item['remote']).parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ elif op == 'launch':
     nodes = etree.fromstring('<DragonConfig>' + text + '</DragonConfig>').findall('.//Grid/DimZ')
     if len(nodes) != 1 or int(nodes[0].get('value')) != state['params']['DimZ']:
         raise RuntimeError('Uploaded XML DimZ differs from the round plan')
-    if state['stem'] != state['date'] + '_dimZ' + str(int(nodes[0].get('value'))):
+    if state.get('mode', 'single') == 'single' and state['stem'] != state['date'] + '_dimZ' + str(int(nodes[0].get('value'))):
         raise RuntimeError('Round name differs from uploaded XML DimZ')
     for name in state['history']: pathlib.Path(name).unlink()
     state['status'] = 'launching'
@@ -281,12 +281,13 @@ def new_log():
             now += timedelta(seconds=1)
 
 
-def rpc(op, stem, log, **kwargs):
+def rpc(op, stem, log, host=companion.HOST, **kwargs):
     """Call one logged remote operation with quoted arguments."""
     request = dict(op=op, path=str(BASE / "outputs/workflow" / (stem + ".json")), **kwargs)
     if op == "launch":
         request["code"] = REMOTE
-    done = companion.execute(["python3", "-c", REMOTE, json.dumps(request)], log, capture=True)
+    done = companion.execute(["python3", "-c", REMOTE, json.dumps(request)], log,
+                             host=host, capture=True)
     return json.loads(done.stdout)
 
 

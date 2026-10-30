@@ -45,9 +45,10 @@
     <Delta value="0.5" />    <!-- Reference slope; the effective local slope is set by deltaA/deltaB -->
     <VariableDelta value="1"/>
     <DiffusionThreshold value="8.3"/>
+    <DiffusionThresholdZ value="0"/> <!-- Positive values cap the |z| contribution in kpc; zero disables the cap -->
     <deltaA value = "0.0180722891566265"/>
     <deltaB value = "0.35"/>
-    <deltaZ value = "0.02"/> <!-- Linear |z| slope in kpc^-1; non-zero here to exercise the 3D feature -->
+    <deltaZ value = "0.2"/> <!-- Linear |z| slope in kpc^-1; non-zero here to exercise the 3D feature -->
     <zt value="4" />          <!-- Scale heigth of the diffusion coefficient, useful in Exp mode: D(z) \propto exp(z/zt) (optional) -->
     <etaT value="1." />       <!-- Low energy correction factor of the diffusion coefficient: D \propto beta^etaT  -->
   </Diffusion>

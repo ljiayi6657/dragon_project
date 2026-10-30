@@ -9,17 +9,15 @@ from sklearn.preprocessing import StandardScaler
 
 import argparse
 import csv
-import hashlib
 import json
 import re
 import os
 import sys
 import shutil
-import uuid
-from collections import OrderedDict
 import pickle
 from datetime import datetime
 from pathlib import Path
+import shlex
 import subprocess
 import time
 import logging
@@ -36,6 +34,9 @@ from dragon_utils.xml_manager.xml_modifier import find_one, get_param, load_xml,
 from dragon_utils.CALETana_functions.datareader import readamsproflxvals, readamsHEflxvals, readamsBCratio
 from dragon_utils.data_processing.physics import SM_output
 from dragon_utils.data_processing.statistic_analysis import chisquare
+from dragon_utils import companion
+from scripts import run_companion as remote
+from scripts.xml_batch import file_hash
 
 # %%
 def update_data(fitSpectra_path):
@@ -218,43 +219,64 @@ def get_farthest_point(X, y, sX, maxloss=False):
     return far_X,far_y.values[0].item()
 
 # %%
-def submit_task(point, cfg, seen, dry=False):
-    bounds = cfg["bounds"]
-    names = list(bounds)
+def value_text(value):
+    """Format one parameter for a stable file name."""
+    return np.format_float_positional(float(value), unique=True, trim="-")
+
+
+def make_stem(point, date):
+    """Build the required parameter-bearing stem."""
+    return (f"{date}_BayesOpt_D{value_text(point['D0'])}"
+            f"_dA{value_text(point['deltaA'])}"
+            f"_dB{value_text(point['deltaB'])}"
+            f"_dZ{value_text(point['deltaZ'])}")
+
+
+def submit_task(point, cfg, seen, host, dry=False):
+    names = list(cfg["seed"])
     if set(point) != set(names):
-        raise ValueError("Candidate names do not match temporary bounds")
+        raise ValueError("Candidate names must match the four-parameter seed")
     point = {name: float(point[name]) for name in names}
+    bounds = cfg.get("bounds")
     for name, value in point.items():
-        low, high = bounds[name]
-        if not np.isfinite(value) or not low <= value <= high:
-            raise ValueError(f"Invalid or out-of-range candidate: {name}={value}")
-    key = tuple(point.values())
+        if not np.isfinite(value):
+            raise ValueError(f"Non-finite candidate: {name}={value}")
+        if bounds is not None:
+            low, high = bounds[name]
+            if not low <= value <= high:
+                raise ValueError(f"Out-of-range candidate: {name}={value}")
+    if point["D0"] <= 0 or point["deltaA"] < 0 or point["deltaB"] <= 0 or point["deltaZ"] < 0:
+        raise ValueError("D0/deltaB must be positive and deltaA/deltaZ non-negative")
+    if host not in cfg["hosts"]:
+        raise KeyError(f"Unknown compute host: {host}")
+    key = (host, *(point[name] for name in names))
     if key in seen:
-        raise ValueError("Duplicate candidate")
+        raise ValueError("Duplicate candidate on the same host")
 
-    base = ROOT / "dragon_utils/xml_manager/baseline.xml"
-    binary = Path(cfg["binary"])
-    if not binary.is_file() or not os.access(binary, os.X_OK):
-        raise FileNotFoundError(binary)
-    build = binary.parent
-    out = ROOT / "outputs/task2"
-    archive = ROOT / "data/dragon_output"
+    base = Path(cfg["base"]).expanduser().resolve()
+    source = Path(cfg["source"]).expanduser().resolve()
+    coeff = Path(cfg["coeff"]).expanduser().resolve()
+    if not base.is_file() or not source.is_file() or not coeff.is_file():
+        raise FileNotFoundError("Base XML, source abundance, or coefficient table is missing")
+    date = cfg["date"]
+    stem = make_stem(point, date)
+    out = ROOT / "outputs/bayes"
     out.mkdir(parents=True, exist_ok=True)
-    archive.mkdir(parents=True, exist_ok=True)
-    stem = datetime.now().astimezone().strftime("%Y-%m-%d") + "_run-" + uuid.uuid4().hex[:12]
-    xml_path = out / f"{stem}.xml"
+    processed = ROOT / "data/processed"
+    processed.mkdir(parents=True, exist_ok=True)
+    xml_path = processed / f"{stem}.xml"
+    param_path = processed / f"{stem}.source.param"
     diff_path = out / f"{stem}.diff"
-    rec_path = out / f"{stem}.json"
-    source_out = build / "output"
-    if any(source_out.glob(stem + "*")):
-        raise FileExistsError("Run output already exists")
+    rec_path = out / f"{stem}-{host}.json"
+    updates = {name: value_text(value) for name, value in point.items()}
+    updates.update({name: value_text(value) for name, value in cfg["fixed"].items()})
+    if not xml_path.exists():
+        modify_xml(base, updates, xml_path, diff_path)
+    if not param_path.exists():
+        shutil.copy2(source, param_path)
+    if file_hash(param_path) != file_hash(source):
+        raise ValueError("Candidate source abundance differs from the fixed source")
 
-    modify_xml(base, {name: repr(value) for name, value in point.items()}, xml_path, diff_path)
-    source_param = build / "config_files/template.source.param"
-    param_path = xml_path.with_suffix(".source.param")
-    if not source_param.is_file():
-        raise FileNotFoundError(source_param)
-    shutil.copy2(source_param, param_path)
     base_doc = load_xml(base)
     run_doc = load_xml(xml_path)
     fixed = {}
@@ -265,6 +287,11 @@ def submit_task(point, cfg, seen, dry=False):
         if name in point:
             if float(value) != point[name]:
                 raise ValueError(f"Candidate was quantized: {name}")
+        elif name in cfg["fixed"]:
+            expected = float(cfg["fixed"][name])
+            fixed[name] = value
+            if float(value) != expected:
+                raise ValueError(f"Fixed search parameter changed: {name}")
         else:
             fixed[name] = get_param(base_doc, name)
             if value != fixed[name]:
@@ -272,61 +299,69 @@ def submit_task(point, cfg, seen, dry=False):
     grid = find_one(run_doc, "//Grid")
     if grid.get("type") != "3D" or float(actual["VariableDelta"]) != 1:
         raise ValueError("Expected 3D VariableDelta model")
-    if float(actual["Zmin"]) > 1 or float(actual["Zmax"]) < 6:
-        raise ValueError("Required p, He, B and C nuclei are not propagated")
-    for name in ("partialstore", "fullstore"):
-        find_one(run_doc, "//Output/" + name)
+    if int(actual["Zmin"]) != 1 or int(actual["Zmax"]) != 8:
+        raise ValueError("Bayesian optimization candidates must use Zmin=1 and Zmax=8")
     if find_one(run_doc, "//Galaxy/Diffusion").get("type") == "Anisotropic":
         raise ValueError("3D VariableDelta requires isotropic diffusion")
-    threshold = float(actual["DiffusionThreshold"])
-    slope = float(actual["deltaA"])
-    center = float(actual["deltaB"])
-    vertical = float(actual["deltaZ"])
-    maximum = center + slope * min(float(actual["Rmax"]), threshold) + vertical * float(actual["L"])
-    if min(threshold, slope, vertical) < 0 or center <= 0 or not np.isfinite(maximum):
+    values = [float(actual[name]) for name in
+              ("DiffusionThreshold", "DiffusionThresholdZ", "deltaA", "deltaB", "deltaZ")]
+    if not all(np.isfinite(value) for value in values):
+        raise ValueError("Non-finite 3D VariableDelta input")
+    if min(values[0], values[1], values[2], values[4]) < 0 or values[3] <= 0:
         raise ValueError("Invalid 3D VariableDelta input")
-    if maximum >= 2:
-        raise ValueError("3D VariableDelta reacceleration limit exceeded")
-    for name in point:
+    for name in (*point, *cfg["fixed"]):
         set_param(run_doc, name, get_param(base_doc, name))
     if render_xml(run_doc) != render_xml(base_doc):
-        raise ValueError("A fixed XML setting changed")
+        raise ValueError("A non-search XML setting changed")
 
-    with base.open("rb") as handle:
-        base_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-    with xml_path.open("rb") as handle:
-        xml_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-    with binary.open("rb") as handle:
-        bin_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-    with (build / ".libs/DRAGON").open("rb") as handle:
-        core_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-    with param_path.open("rb") as handle:
-        source_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    output = find_one(load_xml(xml_path), "//Output")
+    expected = [dict(native=stem + ".txt", archive=stem + ".txt", kind="ascii")]
+    if output.find("fullstore") is not None:
+        expected.append(dict(native=stem + ".fits.gz", archive=stem + ".fits.gz", kind="spatial"))
+    if output.find("partialstore") is not None:
+        expected.append(dict(native=stem + "_spectrum.fits.gz",
+                             archive=stem + "-spectrum.fits.gz", kind="solar"))
+    target = cfg["hosts"][host]
+    ssh = target["ssh"]
+    program = Path(target["program"])
+    state_key = stem + "-" + host
     rec = {
         "id": stem,
+        "stem": stem,
+        "mode": "bayes",
+        "date": date,
+        "host": host,
+        "ssh": ssh,
+        "threads": int(target["threads"]),
+        "stateKey": state_key,
         "status": "checked",
         "candidate": point,
         "order": names,
         "bounds": bounds,
-        "units": {"D0": "1e28 cm2/s", "deltaZ": "kpc^-1"},
+        "units": {"D0": "1e28 cm2/s", "deltaA": "kpc^-1",
+                  "deltaB": "1", "deltaZ": "kpc^-1"},
         "paths": {name: PARAM_MAP[name] for name in names},
         "actual": actual,
         "fixed": fixed,
+        "params": {"DimZ": int(actual["DimZ"]), "Zmax": int(actual["Zmax"])},
         "baseline": str(base),
-        "baselineHash": base_hash,
+        "baselineHash": file_hash(base),
         "xml": str(xml_path),
-        "xmlHash": xml_hash,
+        "xmlHash": file_hash(xml_path),
         "diff": str(diff_path),
-        "binary": str(binary),
-        "binaryHash": bin_hash,
-        "coreBinary": str(build / ".libs/DRAGON"),
-        "coreHash": core_hash,
         "sourceParam": str(param_path),
-        "sourceHash": source_hash,
-        "sourceMode": "per-run copy",
-        "cwd": str(build),
-        "command": [str(binary), str(xml_path)],
-        "source": str(source_out / f"{stem}.txt"),
+        "sourceHash": file_hash(param_path),
+        "coefficient": str(coeff),
+        "coefficientHash": file_hash(coeff),
+        "sourceMode": "fixed per-run copy",
+        "program": str(program),
+        "runXml": str(xml_path),
+        "inputs": [
+            {"local": str(xml_path), "remote": str(xml_path), "sha256": file_hash(xml_path)},
+            {"local": str(param_path), "remote": str(param_path), "sha256": file_hash(param_path)},
+        ],
+        "expected": expected,
+        "source": str(program / "output" / f"{stem}.txt"),
         "record": str(rec_path),
         "components": None,
         "total": None,
@@ -336,56 +371,148 @@ def submit_task(point, cfg, seen, dry=False):
         seen.add(key)
         return rec
 
-    log = ROOT / "logs" / datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S.md")
-    log.parent.mkdir(parents=True, exist_ok=True)
-    while log.exists():
-        time.sleep(1)
-        log = ROOT / "logs" / datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S.md")
-    start = datetime.now().astimezone()
-    stdout = ""
-    stderr = ""
-    code = None
+    log = remote.new_log()
+    runtime = remote.new_log()
+    rec.update(log=str(log), localLog=str(log), remoteLog=str(runtime),
+               status="preparing", token=file_hash(log) + datetime.now().astimezone().isoformat())
+    reserved = False
     try:
-        done = subprocess.run(rec["command"], cwd=build, capture_output=True,
-                              text=True, errors="replace", timeout=cfg["timeout"])
-        code, stdout, stderr = done.returncode, done.stdout, done.stderr
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or b""
-        stderr = exc.stderr or b""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", "replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", "replace")
-        rec["error"] = "DRAGON2 timed out"
-    end = datetime.now().astimezone()
-    log.write_text("# DRAGON2 run " + stem + "\n\n"
-                   + "Command: " + json.dumps(rec["command"]) + "\n"
-                   + "Working directory: " + str(build) + "\n\n"
-                   + "## stdout\n\n" + stdout + "\n\n## stderr\n\n" + stderr + "\n",
-                   encoding="utf-8")
-    rec.update({"start": start.isoformat(), "end": end.isoformat(),
-                "returnCode": code, "log": str(log), "artifacts": []})
-    for source in sorted(source_out.glob(stem + "*")):
-        if not source.is_file():
-            continue
-        target = archive / source.name
-        if target.exists():
-            raise FileExistsError(target)
-        shutil.copy2(source, target)
-        with target.open("rb") as handle:
-            digest = hashlib.file_digest(handle, "sha256").hexdigest()
-        rec["artifacts"].append({"path": str(target), "sha256": digest,
-                                 "bytes": target.stat().st_size})
-    needed = {stem + ext for ext in (".txt", ".fits.gz", "_spectrum.fits.gz")}
-    saved = {Path(item["path"]).name for item in rec["artifacts"]}
-    if code == 0 and needed <= saved and all(item["bytes"] > 0 for item in rec["artifacts"]):
-        rec["status"] = "simulated"
-        rec["spectrum"] = str(archive / (stem + ".txt"))
-    else:
-        rec["status"] = "run_failed"
-        rec.setdefault("error", "Nonzero exit or missing/empty model product")
-    rec_path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        remote.rpc("reserve", state_key, log, host=ssh, spec=rec)
+        reserved = True
+        for item in rec["inputs"]:
+            companion.upload(item["local"], item["remote"], log, host=ssh)
+        state = remote.rpc("launch", state_key, log, host=ssh, token=rec["token"])
+        rec.update(state)
+        view = shlex.join([*companion.SSH, ssh,
+                           shlex.join(["tail", "-n", "60", "-F", "--", rec["remoteLog"]])])
+        display = "#{session_name}:#{window_index}.#{pane_index}"
+        session = host + "_log"
+        target = f"={session}:log.0"
+        try:
+            try:
+                viewer = companion.run_command(
+                    ["tmux", "new-session", "-d", "-s", session, "-n", "log",
+                     "-P", "-F", display, view], log, capture=True)
+            except RuntimeError:
+                companion.run_command(
+                    ["tmux", "respawn-pane", "-k", "-t", target, view],
+                    log, capture=True)
+                companion.run_command(
+                    ["tmux", "clear-history", "-t", target],
+                    log, capture=True)
+                viewer = companion.run_command(
+                    ["tmux", "display-message", "-p", "-t", target, display],
+                    log, capture=True)
+            rec["monitor"] = viewer.stdout.strip()
+            print(f"Monitor: tmux attach -t {session} ({rec['monitor']})", flush=True)
+        except (OSError, RuntimeError) as err:
+            rec["monitor"] = None
+            print(f"Warning: tmux monitor unavailable: {err}", flush=True)
+    except BaseException:
+        if reserved:
+            try:
+                remote.rpc("abort", state_key, log, host=ssh, token=rec["token"])
+            except Exception:
+                pass
+        raise
+    finally:
+        rec_path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
     seen.add(key)
+    return rec
+
+
+def apply_coeff(source, target, coeff):
+    """Convert one Z=8 ASCII spectrum into its Z=14 prediction."""
+    source = Path(source)
+    target = Path(target)
+    coeff = Path(coeff)
+    with source.open(encoding="utf-8") as handle:
+        header = handle.readline().split()
+    if header[:2] != ["Energy", "[GeV]"]:
+        raise ValueError("Invalid Z=8 ASCII header")
+    names = header[2:]
+    model = np.loadtxt(source, skiprows=1)
+    with coeff.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fields = reader.fieldnames or []
+        rows = list(reader)
+    if fields != ["Energy_GeV", *names]:
+        raise ValueError("Coefficient columns differ from the DRAGON2 spectrum")
+    factors = np.array([[float(row[name]) for name in fields] for row in rows])
+    if model.shape != factors.shape or not np.allclose(model[:, 0], factors[:, 0], rtol=1e-12, atol=0):
+        raise ValueError("Coefficient energy grid differs from the DRAGON2 spectrum")
+    if not np.all(np.isfinite(factors)) or np.any(factors[:, 1:] <= 0):
+        raise ValueError("Coefficient table contains invalid values")
+    result = model.copy()
+    result[:, 1:] *= factors[:, 1:]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    np.savetxt(target, result, fmt="%.12e", comments="",
+               header="Energy [GeV] " + " ".join(names))
+    return target
+
+
+def collect_task(rec):
+    """Wait for one remote task and retrieve its verified products."""
+    log = Path(rec["log"])
+    path = Path(rec["record"])
+    while rec["status"] in {"launching", "running", "finalizing"}:
+        print(f"{rec['host']} {rec['id']}: {rec['status']}", flush=True)
+        time.sleep(20)
+        state = remote.rpc("status", rec["stateKey"], log, host=rec["ssh"])
+        rec.update(state)
+        path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+    runtime = ROOT / "logs" / Path(rec["remoteLog"]).name
+    companion.download(rec["remoteLog"], runtime, log, host=rec["ssh"])
+    rec["runtimeLog"] = str(runtime)
+    duration = None
+    with runtime.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            text = line.rstrip("\r\n")
+            if re.fullmatch(r"Solution found in .+ s\.", text):
+                duration = text
+    rec["duration"] = duration
+    if duration:
+        print(f"{rec['host']}: {duration}", flush=True)
+    if rec["status"] != "succeeded" or rec.get("exitcode") != 0:
+        rec["status"] = "run_failed"
+        path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        return rec
+    archive = ROOT / "data/dragon_output"
+    archive.mkdir(parents=True, exist_ok=True)
+    rec["artifacts"] = []
+    for item in rec["outputs"]:
+        if item["kind"] == "ascii":
+            suffix = ".txt"
+        elif item["kind"] == "spatial":
+            suffix = ".fits.gz"
+        else:
+            suffix = "-spectrum.fits.gz"
+        target = archive / f"{rec['id']}-{rec['host']}{suffix}"
+        staged = target.with_name(target.stem + ".part" + target.suffix)
+        staged.unlink(missing_ok=True)
+        try:
+            companion.download(item["remote"], staged, log, host=rec["ssh"])
+            if staged.stat().st_size != item["size"] or file_hash(staged) != item["sha256"]:
+                raise ValueError(f"Returned output hash/size mismatch: {target}")
+            code = (
+                "import sys; from scripts.run_companion import validate_data, validate_fits; "
+                "(validate_data if sys.argv[1] == 'ascii' else validate_fits)(sys.argv[2])"
+            )
+            companion.run_command(
+                ["env", "-u", "PYTHONPATH", sys.executable, "-c", code,
+                 item["kind"], staged], log, cwd=ROOT)
+            staged.replace(target)
+        finally:
+            staged.unlink(missing_ok=True)
+        rec["artifacts"].append({**item, "local": str(target)})
+        print(f"Retrieved: {target}", flush=True)
+    raw = next(item["local"] for item in rec["artifacts"] if item["kind"] == "ascii")
+    pred = archive / f"{rec['id']}-{rec['host']}-z14.txt"
+    apply_coeff(raw, pred, rec["coefficient"])
+    print(f"Predicted Z=14 spectrum: {pred}", flush=True)
+    rec.update(status="simulated", spectrumZ8=raw, spectrum=str(pred),
+               spectrumHash=file_hash(pred))
+    path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
     return rec
 
 # %%
@@ -528,24 +655,9 @@ def checkSimulationProgress(X_data, y_data, X_fault, point_list, loss_list, maxl
 # %%
 def obj_func(point, cfg, seen, rec=None):
     if rec is None:
-        rec = submit_task(point, cfg, seen)
-    else:
-        if rec["returnCode"] != 0 or rec["candidate"] != point:
-            raise ValueError("Resume record does not match a successful candidate")
-        for name, path, digest in (("XML", rec["xml"], rec["xmlHash"]),
-                                   ("source", rec["sourceParam"], rec["sourceHash"]),
-                                   ("binary", rec["binary"], rec["binaryHash"]),
-                                   ("core", rec["coreBinary"], rec["coreHash"]),
-                                   ("spectrum", rec["spectrum"], next(
-                                       item["sha256"] for item in rec["artifacts"]
-                                       if item["path"] == rec["spectrum"]))):
-            with Path(path).open("rb") as handle:
-                if hashlib.file_digest(handle, "sha256").hexdigest() != digest:
-                    raise ValueError(f"Resume {name} hash mismatch")
-        seen.add(tuple(point[name] for name in cfg["bounds"]))
-        rec["initialFailure"] = rec.get("error")
-        rec.pop("error", None)
-        rec["status"] = "simulated"
+        raise ValueError("A retrieved remote record is required for scoring")
+    if rec["candidate"] != point:
+        raise ValueError("Remote record does not match the candidate")
     if rec["status"] != "simulated":
         return rec
     try:
@@ -638,19 +750,76 @@ def obj_func(point, cfg, seen, rec=None):
         total = float(sum(parts.values()))
         if not np.isfinite(total) or total < 0:
             raise ValueError("Invalid total chi-square")
-        out = ROOT / "outputs/task2" / (rec["id"] + "-residual.csv")
+        out = ROOT / "outputs/csv" / (rec["id"] + "-" + rec["host"] + "-residual.csv")
+        out.parent.mkdir(parents=True, exist_ok=True)
         with out.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-        with out.open("rb") as handle:
-            digest = hashlib.file_digest(handle, "sha256").hexdigest()
         rec.update({"status": "scored", "components": parts, "total": total,
-                    "points": str(out), "pointsHash": digest, "count": counts})
+                    "points": str(out), "pointsHash": file_hash(out), "count": counts})
+        figures = {}
+        for label, script in (("BCfitting", "BCfitting.py"),
+                              ("pHefitting27", "pHefitting27.py")):
+            target = ROOT / "outputs/figures" / f"{rec['id']}-{rec['host']}-{label}.png"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            companion.run_command(
+                ["env", "-u", "PYTHONPATH", sys.executable,
+                 ROOT / "dragon_utils/plotting" / script,
+                 rec["spectrum"], "--output", target], rec["log"])
+            if not target.is_file() or not target.stat().st_size:
+                raise ValueError(f"Plot was not created: {target}")
+            figures[label] = {"path": str(target), "sha256": file_hash(target)}
+        rec["plots"] = figures
     except Exception as exc:
         rec.update({"status": "evaluation_failed", "error": str(exc), "total": None})
     Path(rec["record"]).write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
     return rec
+
+
+def save_csv(records, batch, result, proposal=None):
+    """Upsert one synchronous batch in the dated optimization table."""
+    if not records:
+        raise ValueError("No optimization records to save")
+    path = ROOT / "outputs/csv" / f"{records[0]['date']}_BayesOpt.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "date", "batch", "host", "stem", "status", "D0", "deltaA", "deltaB", "deltaZ",
+        "chi2_p", "chi2_He", "chi2_BC", "chi2_total", "optimizer_loss",
+        "optimizer_result", "next_proposal", "z8_spectrum", "z14_spectrum",
+        "BCfitting", "pHefitting27", "duration", "record",
+    ]
+    prior = []
+    if path.exists():
+        with path.open(newline="", encoding="utf-8") as handle:
+            prior = list(csv.DictReader(handle))
+    keys = {(rec["date"], str(batch), rec["host"], rec["id"]) for rec in records}
+    prior = [row for row in prior if
+             (row["date"], row["batch"], row["host"], row["stem"]) not in keys]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(prior)
+        for rec in records:
+            parts = rec.get("components") or {}
+            plots = rec.get("plots") or {}
+            point = rec["candidate"]
+            writer.writerow({
+                "date": rec["date"], "batch": batch, "host": rec["host"],
+                "stem": rec["id"], "status": rec["status"],
+                "D0": point["D0"], "deltaA": point["deltaA"],
+                "deltaB": point["deltaB"], "deltaZ": point["deltaZ"],
+                "chi2_p": parts.get("p"), "chi2_He": parts.get("He"),
+                "chi2_BC": parts.get("BC"), "chi2_total": rec.get("total"),
+                "optimizer_loss": rec.get("total"), "optimizer_result": result,
+                "next_proposal": json.dumps(proposal, separators=(",", ":")) if proposal else "",
+                "z8_spectrum": rec.get("spectrumZ8", ""),
+                "z14_spectrum": rec.get("spectrum", ""),
+                "BCfitting": plots.get("BCfitting", {}).get("path", ""),
+                "pHefitting27": plots.get("pHefitting27", {}).get("path", ""),
+                "duration": rec.get("duration", ""), "record": rec["record"],
+            })
+    return path
 
 # %%
 def get_pointsInBounds(bounds, X, y):
@@ -668,26 +837,20 @@ def get_pointsInBounds(bounds, X, y):
 # %%
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true")
-    parser.add_argument("--runs", type=int, default=2)
-    parser.add_argument("--resume")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true")
+    mode.add_argument("--test", action="store_true")
+    mode.add_argument("--resume-test", dest="resume", action="store_true")
+    mode.add_argument("--calls", type=int)
     args = parser.parse_args()
-    if args.runs not in (1, 2):
-        raise ValueError("Task 2 accepts one or two local runs")
     with (Path(__file__).parent / "config.yaml").open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)["local"]
-    names = list(cfg["bounds"])
-    if set(names) != set(cfg["seed"]):
-        raise ValueError("Seed and temporary bounds differ")
-    seen = set()
-    first = submit_task(cfg["seed"], cfg, seen, dry=True)
-    second = dict(cfg["seed"])
-    second[names[0]] = cfg["bounds"][names[0]][1]
-    if second == cfg["seed"]:
-        second[names[0]] = cfg["bounds"][names[0]][0]
-    other = submit_task(second, cfg, seen, dry=True)
-    if first["xmlHash"] == other["xmlHash"] or first["source"] == other["source"]:
-        raise ValueError("Preflight candidates share XML or output")
+        cfg = yaml.safe_load(handle)["search"]
+    names = ["D0", "deltaA", "deltaB", "deltaZ"]
+    if list(cfg["seed"]) != names:
+        raise ValueError("Seed order must be D0, deltaA, deltaB, deltaZ")
+    if list(cfg["hosts"]) != ["companion", "yellowgiant"]:
+        raise ValueError("The synchronous host order must be companion, yellowgiant")
+    cfg["date"] = datetime.now().astimezone().strftime("%Y-%m-%d")
     base = str(ROOT / "data/experiment_data/expdata") + "/"
     observed = {
         "p": readamsproflxvals(base, convtoE=False),
@@ -704,75 +867,125 @@ def main():
         err = np.array([item[1] for item in vals])
         if chisquare(obs, obs, err) != 0:
             raise ValueError("Chi-square preflight failed")
-    sample = Path(cfg["sample"])
-    format_ok = False
-    if sample.is_file():
-        with sample.open(encoding="utf-8") as handle:
-            header = handle.readline().split()
-        format_ok = (header[:2] == ["Energy", "[GeV]"] and
-                     all(header.count(name) == 1 for name in
-                         ("Pri_p", "Sec_p", "NUC_2003", "NUC_2004",
-                          "NUC_5010", "NUC_5011", "NUC_6012", "NUC_6013", "NUC_6014")))
-        if not format_ok:
-            raise ValueError("Historical sample format is invalid")
-    check = {
-        "status": "passed", "first": first["record"], "second": other["record"],
-        "differentXml": True, "differentOutput": True, "observations": counts,
-        "sample": str(sample), "sampleFormat": format_ok,
-        "sampleUse": "header check only; never scored",
-    }
-    check_path = ROOT / "outputs/task2" / (
-        datetime.now().astimezone().strftime("%Y-%m-%d") + "_check-" + uuid.uuid4().hex[:12] + ".json")
-    check_path.write_text(json.dumps(check, indent=2) + "\n", encoding="utf-8")
-    print(f"Preflight: {check_path}", flush=True)
+    with Path(cfg["coeff"]).open(newline="", encoding="utf-8") as handle:
+        fields = csv.DictReader(handle).fieldnames or []
+    required = {"Energy_GeV", "Pri_p", "Sec_p", "NUC_2003", "NUC_2004",
+                "NUC_5010", "NUC_5011", "NUC_6012", "NUC_6013", "NUC_6014"}
+    if not required <= set(fields):
+        raise ValueError("Z=14/Z=8 coefficient table lacks required columns")
+    seen = set()
     if args.check:
+        records = [submit_task(cfg["seed"], cfg, seen, host, dry=True)
+                   for host in cfg["hosts"]]
+        print(json.dumps({"status": "passed", "records": [rec["record"] for rec in records],
+                          "observations": counts}, indent=2), flush=True)
+        return
+    if args.test or args.resume:
+        if args.resume:
+            stem = make_stem(cfg["seed"], cfg["date"])
+            records = []
+            for host in cfg["hosts"]:
+                path = ROOT / "outputs/bayes" / f"{stem}-{host}.json"
+                rec = json.loads(path.read_text(encoding="utf-8"))
+                if (rec.get("id") != stem or rec.get("host") != host or
+                        rec.get("candidate") != cfg["seed"]):
+                    raise ValueError(f"Resume record differs from the test seed: {path}")
+                local_status = rec.get("status")
+                saved = {name: rec[name] for name in
+                         ("artifacts", "spectrumZ8", "spectrum", "spectrumHash",
+                          "runtimeLog", "duration", "components", "total", "points",
+                          "pointsHash", "count", "plots") if name in rec}
+                artifacts = rec.get("artifacts", [])
+                ready = (local_status in {"simulated", "scored"} and
+                         len(artifacts) == len(rec.get("outputs", [])))
+                for item in artifacts:
+                    target = Path(item.get("local", ""))
+                    ready = (ready and target.is_file() and target.stat().st_size == item["size"]
+                             and file_hash(target) == item["sha256"])
+                target = Path(rec.get("spectrum", ""))
+                ready = (ready and target.is_file() and
+                         file_hash(target) == rec.get("spectrumHash"))
+                parts = rec.get("components")
+                scored = (ready and local_status == "scored" and isinstance(parts, dict) and
+                          set(parts) == {"p", "He", "BC"} and
+                          isinstance(rec.get("total"), (int, float)) and
+                          np.isfinite(rec["total"]) and
+                          set(rec.get("plots", {})) == {"BCfitting", "pHefitting27"})
+                if scored:
+                    target = Path(rec.get("points", ""))
+                    scored = (target.is_file() and
+                              file_hash(target) == rec.get("pointsHash"))
+                    for item in rec.get("plots", {}).values():
+                        target = Path(item.get("path", ""))
+                        scored = (scored and target.is_file() and
+                                  file_hash(target) == item.get("sha256"))
+                state = remote.rpc("status", rec["stateKey"], Path(rec["log"]),
+                                   host=rec["ssh"])
+                if state.get("token") != rec.get("token"):
+                    raise ValueError(f"Remote task token differs from the local record: {host}")
+                runok = state.get("status") == "succeeded" and state.get("exitcode") == 0
+                ready = ready and runok
+                scored = scored and runok
+                rec.update(state)
+                rec.update(saved)
+                if ready:
+                    rec["status"] = "scored" if scored else "simulated"
+                path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+                records.append(rec)
+        else:
+            records = [submit_task(cfg["seed"], cfg, seen, host)
+                       for host in cfg["hosts"]]
+        records = [rec if rec["status"] in {"simulated", "scored"} else collect_task(rec)
+                   for rec in records]
+        records = [obj_func(cfg["seed"], cfg, seen, rec=rec) for rec in records]
+        if all(rec["status"] == "scored" for rec in records):
+            left = np.loadtxt(records[0]["spectrum"], skiprows=1)
+            right = np.loadtxt(records[1]["spectrum"], skiprows=1)
+            scale = np.maximum(np.maximum(np.abs(left), np.abs(right)), np.finfo(float).tiny)
+            parity = float(np.max(np.abs(left - right) / scale))
+            result = f"test_stopped; z14_max_relative_difference={parity:.12g}"
+        else:
+            result = "test_failed; no_next_proposal"
+        table = save_csv(records, 1, result)
+        print(f"Test table: {table}", flush=True)
+        for rec in records:
+            print(f"{rec['host']}: {rec['status']} chi2={rec.get('total')}", flush=True)
+        if any(rec["status"] != "scored" for rec in records):
+            raise RuntimeError("Synchronous two-host test failed; no next proposal was made")
+        print("Two-host test completed; optimizer stopped before the next proposal.", flush=True)
         return
 
-    opt = Optimizer([Real(*cfg["bounds"][name], name=name) for name in names],
-                    base_estimator="GP", n_initial_points=1, random_state=cfg["seedValue"])
-    seen = set()
-    point = dict(cfg["seed"])
-    history = []
-    path = ROOT / "outputs/task2" / (
-        datetime.now().astimezone().strftime("%Y-%m-%d") + "_search-" + uuid.uuid4().hex[:12] + ".json")
-    for index in range(args.runs):
-        prior = None
-        if index == 0 and args.resume:
-            prior = json.loads(Path(args.resume).read_text(encoding="utf-8"))
-            if prior["status"] not in ("evaluation_failed", "simulated"):
-                raise ValueError("Only a completed simulation can be resumed")
-            if "sourceParam" not in prior:
-                source_param = Path(cfg["binary"]).parent / "config_files/template.source.param"
-                log = Path(prior["log"]).read_text(encoding="utf-8")
-                if "Using config_files/template.source.param!" not in log:
-                    raise ValueError("Cannot establish source file used by prior run")
-                if source_param.stat().st_mtime > datetime.fromisoformat(prior["start"]).timestamp():
-                    raise ValueError("Fallback source file changed after prior run")
-                param_path = Path(prior["xml"]).with_suffix(".source.param")
-                shutil.copy2(source_param, param_path)
-                with param_path.open("rb") as handle:
-                    prior["sourceHash"] = hashlib.file_digest(handle, "sha256").hexdigest()
-                prior["sourceParam"] = str(param_path)
-                prior["sourceMode"] = "fallback during run; copied after for replay"
-            core = Path(cfg["binary"]).parent / ".libs/DRAGON"
-            with core.open("rb") as handle:
-                prior["coreHash"] = hashlib.file_digest(handle, "sha256").hexdigest()
-            prior["coreBinary"] = str(core)
-        rec = obj_func(point, cfg, seen, rec=prior)
-        rec["index"] = index + 1
-        if rec["status"] == "scored":
-            opt.tell([point[name] for name in names], rec["total"])
-            point = dict(zip(names, opt.ask()))
-            rec["nextProposal"] = point
-        else:
-            rec["nextProposal"] = None
-        Path(rec["record"]).write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
-        history.append(rec)
-        path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
-        print(f"Run {index + 1}: {rec['status']} {rec['id']} chi2={rec['total']}", flush=True)
-        if rec["status"] != "scored":
-            raise RuntimeError(f"Run stopped: {rec['error']}; record: {rec['record']}")
-    print(f"Ordered record: {path}", flush=True)
+    bounds = cfg.get("bounds")
+    if not isinstance(bounds, dict) or list(bounds) != names:
+        raise ValueError("Set linear bounds for D0, deltaA, deltaB, deltaZ before a full search")
+    if args.calls is None or args.calls < 2 or args.calls % 2:
+        raise ValueError("--calls must be a positive even number")
+    for name, pair in bounds.items():
+        if len(pair) != 2 or not float(pair[0]) < float(pair[1]):
+            raise ValueError(f"Invalid linear bounds: {name}")
+    opt = Optimizer([Real(*bounds[name], prior="uniform", name=name) for name in names],
+                    base_estimator="GP", n_initial_points=int(cfg["nInitial"]),
+                    random_state=cfg["seedValue"], avoid_duplicates=True)
+    points = [dict(cfg["seed"]), dict(zip(names, opt.ask()))]
+    for batch in range(1, args.calls // 2 + 1):
+        records = [submit_task(point, cfg, seen, host)
+                   for point, host in zip(points, cfg["hosts"])]
+        records = [collect_task(rec) for rec in records]
+        records = [obj_func(point, cfg, seen, rec=rec)
+                   for point, rec in zip(points, records)]
+        if any(rec["status"] != "scored" for rec in records):
+            save_csv(records, batch, "batch_failed; no_next_proposal")
+            raise RuntimeError("Synchronous batch failed; optimizer was not updated")
+        opt.tell([[point[name] for name in names] for point in points],
+                 [rec["total"] for rec in records])
+        proposal = None
+        if batch < args.calls // 2:
+            proposal = [dict(zip(names, item))
+                        for item in opt.ask(n_points=2, strategy="cl_min")]
+        table = save_csv(records, batch, "batch_told", proposal)
+        print(f"Batch {batch} completed: {table}", flush=True)
+        if proposal is not None:
+            points = proposal
 
 if __name__ == "__main__":
     main()
