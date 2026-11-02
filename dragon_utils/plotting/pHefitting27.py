@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import datetime
+import json
 from pathlib import Path
 import sys
 from zoneinfo import ZoneInfo
@@ -181,6 +182,7 @@ def plot_flux(energy, flux, output=None, fit=False, fit_min=FIT_MIN):
         source = "none"
         analytic = None
         scan = None
+        fitraw = raw
         if fit:
             fitset &= points >= fit_min
             count = int(np.count_nonzero(fitset))
@@ -189,6 +191,7 @@ def plot_flux(energy, flux, output=None, fit=False, fit_min=FIT_MIN):
             model = rigidity(energy, flux, points[fitset], mode, phi)
             data = obs[fitset]
             sigma = error[fitset]
+            fitraw = chisquare(data, model, sigma)
             fitout = fit_constant(data, model, sigma, SCAN_SCALE)
             analytic = fitout["analytic"]
             anachi = fitout["anachi"]
@@ -206,6 +209,7 @@ def plot_flux(energy, flux, output=None, fit=False, fit_min=FIT_MIN):
         else:
             print(f"{mode}: raw chi-square = {chi2:.10g}; N = {used}")
         results[mode] = {"chi2": chi2, "raw": raw, "used": used,
+                         "fitraw": fitraw,
                          "excluded": excluded, "constant": scale,
                          "fitused": int(np.count_nonzero(fitset)), "dof": dof,
                          "reduced": chi2 / dof, "source": source,
@@ -336,6 +340,26 @@ def main():
     except (ValueError, OSError) as exc:
         plt.close("all")
         parser.exit(1, f"Error: {exc}\n")
+    if args.fit:
+        payload = {}
+        for mode in ("p", "He"):
+            item = results[mode]
+            payload[mode] = {
+                "chi2": float(item["chi2"]),
+                "raw": float(item["raw"]),
+                "fitraw": float(item["fitraw"]),
+                "constant": float(item["constant"]),
+                "fitused": int(item["fitused"]),
+                "dof": int(item["dof"]),
+                "reduced": float(item["reduced"]),
+                "source": item["source"],
+                "analytic": float(item["analytic"]),
+                "scan": [[float(constant), float(chi2)]
+                         for constant, chi2 in item["scan"]],
+            }
+        payload["fitMin"] = float(args.fit_min)
+        print("FIT_RESULT=" + json.dumps(payload, sort_keys=True,
+                                         separators=(",", ":")))
     print(f"Saved figure: {target}")
 
 

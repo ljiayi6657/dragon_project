@@ -23,9 +23,11 @@ import time
 import logging
 import getpass
 import random
+from zoneinfo import ZoneInfo
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
+TOKYO = ZoneInfo("Asia/Tokyo")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -220,16 +222,27 @@ def get_farthest_point(X, y, sX, maxloss=False):
 
 # %%
 def value_text(value):
-    """Format one parameter for a stable file name."""
+    """Format one parameter without changing its stored precision."""
     return np.format_float_positional(float(value), unique=True, trim="-")
+
+
+def name_text(value):
+    """Format one parameter with at most four significant digits."""
+    return format(float(value), ".4g")
+
+
+def point_text(point):
+    """Format one optimizer point for compact monitoring output."""
+    return " ".join(f"{name}={name_text(point[name])}"
+                    for name in ("D0", "deltaA", "deltaB", "deltaZ"))
 
 
 def make_stem(point, date):
     """Build the required parameter-bearing stem."""
-    return (f"{date}_BayesOpt_D{value_text(point['D0'])}"
-            f"_dA{value_text(point['deltaA'])}"
-            f"_dB{value_text(point['deltaB'])}"
-            f"_dZ{value_text(point['deltaZ'])}")
+    return (f"{date}_BayesOpt_D{name_text(point['D0'])}"
+            f"_dA{name_text(point['deltaA'])}"
+            f"_dB{name_text(point['deltaB'])}"
+            f"_dZ{name_text(point['deltaZ'])}")
 
 
 def submit_task(point, cfg, seen, host, dry=False):
@@ -249,16 +262,17 @@ def submit_task(point, cfg, seen, host, dry=False):
         raise ValueError("D0/deltaB must be positive and deltaA/deltaZ non-negative")
     if host not in cfg["hosts"]:
         raise KeyError(f"Unknown compute host: {host}")
-    key = (host, *(point[name] for name in names))
-    if key in seen:
-        raise ValueError("Duplicate candidate on the same host")
+    date = datetime.now(TOKYO).strftime("%Y-%m-%d")
+    key = tuple(point[name] for name in names)
+    stem_key = ("stem", date, *(name_text(point[name]) for name in names))
+    if key in seen or stem_key in seen:
+        raise ValueError("Duplicate candidate across the formal search")
 
     base = Path(cfg["base"]).expanduser().resolve()
     source = Path(cfg["source"]).expanduser().resolve()
     coeff = Path(cfg["coeff"]).expanduser().resolve()
     if not base.is_file() or not source.is_file() or not coeff.is_file():
         raise FileNotFoundError("Base XML, source abundance, or coefficient table is missing")
-    date = cfg["date"]
     stem = make_stem(point, date)
     out = ROOT / "outputs/bayes"
     out.mkdir(parents=True, exist_ok=True)
@@ -369,6 +383,7 @@ def submit_task(point, cfg, seen, host, dry=False):
     if dry:
         rec_path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
         seen.add(key)
+        seen.add(stem_key)
         return rec
 
     log = remote.new_log()
@@ -418,6 +433,7 @@ def submit_task(point, cfg, seen, host, dry=False):
     finally:
         rec_path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
     seen.add(key)
+    seen.add(stem_key)
     return rec
 
 
@@ -451,16 +467,20 @@ def apply_coeff(source, target, coeff):
     return target
 
 
-def collect_task(rec):
-    """Wait for one remote task and retrieve its verified products."""
+def collect_task(rec, once=False, quiet=False):
+    """Poll or wait for one remote task and retrieve verified products."""
     log = Path(rec["log"])
     path = Path(rec["record"])
     while rec["status"] in {"launching", "running", "finalizing"}:
-        print(f"{rec['host']} {rec['id']}: {rec['status']}", flush=True)
-        time.sleep(20)
+        if not quiet:
+            print(f"{rec['host']} {rec['id']}: {rec['status']}", flush=True)
+        if not once:
+            time.sleep(20)
         state = remote.rpc("status", rec["stateKey"], log, host=rec["ssh"])
         rec.update(state)
         path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        if once and rec["status"] in {"launching", "running", "finalizing"}:
+            return rec
     runtime = ROOT / "logs" / Path(rec["remoteLog"]).name
     companion.download(rec["remoteLog"], runtime, log, host=rec["ssh"])
     rec["runtimeLog"] = str(runtime)
@@ -658,7 +678,7 @@ def obj_func(point, cfg, seen, rec=None):
         raise ValueError("A retrieved remote record is required for scoring")
     if rec["candidate"] != point:
         raise ValueError("Remote record does not match the candidate")
-    if rec["status"] != "simulated":
+    if rec["status"] not in {"simulated", "scored"}:
         return rec
     try:
         spec = Path(rec["spectrum"])
@@ -667,8 +687,7 @@ def obj_func(point, cfg, seen, rec=None):
         if header[:2] != ["Energy", "[GeV]"]:
             raise ValueError("Invalid DRAGON2 ASCII header")
         columns = header[2:]
-        required = ("Pri_p", "Sec_p", "NUC_2003", "NUC_2004",
-                    "NUC_5010", "NUC_5011", "NUC_6012", "NUC_6013", "NUC_6014")
+        required = ("NUC_5010", "NUC_5011", "NUC_6012", "NUC_6013", "NUC_6014")
         if any(columns.count(name) != 1 for name in required):
             raise ValueError("Required isotope column missing or duplicated")
         data = np.loadtxt(spec, skiprows=1)
@@ -678,113 +697,113 @@ def obj_func(point, cfg, seen, rec=None):
             raise ValueError("Invalid model energy axis or values")
         energy = data[:, 0]
         base = str(ROOT / "data/experiment_data/expdata") + "/"
-        observed = {
-            "p": readamsproflxvals(base, convtoE=False),
-            "He": readamsHEflxvals(base, convtoE=False),
-            "BC": readamsBCratio(base),
-        }
-        limits = {"p": 30, "He": 30, "BC": 10}
-        counts = {"p": 36, "He": 37, "BC": 40}
-        species = {
-            "p": (("p", 1, 1, 0.938272046),),
-            "He": (("NUC_2003", 2, 3, 3 * 0.931494),
-                   ("NUC_2004", 2, 4, 3.727379508)),
-            "BC": (("NUC_5010", 5, 10, 10 * 0.931494),
+        observed = readamsBCratio(base)
+        points = [(float(axis), float(vals[0]), float(vals[1]), vals[2])
+                  for axis, vals in observed.items() if vals[2][0] >= 10]
+        if len(points) != 40:
+            raise ValueError("Unexpected observation count for BC")
+        axis = np.array([item[0] for item in points])
+        obs = np.array([item[1] for item in points])
+        error = np.array([item[2] for item in points])
+        boron = np.zeros(len(points))
+        carbon = np.zeros(len(points))
+        species = (("NUC_5010", 5, 10, 10 * 0.931494),
                    ("NUC_5011", 5, 11, 11 * 0.931494),
                    ("NUC_6012", 6, 12, 12 * 0.931494),
                    ("NUC_6013", 6, 13, 13 * 0.931494),
-                   ("NUC_6014", 6, 14, 14 * 0.931494)),
-        }
-        parts = {}
+                   ("NUC_6014", 6, 14, 14 * 0.931494))
+        phi = cfg["phi"]["BC"]
+        for name, charge, massnum, mass in species:
+            flux = data[:, columns.index(name) + 1] / 10000
+            _, toa = SM_output(energy, flux, PhiP=phi, Mass=mass / massnum,
+                               output_energies=axis, charge=charge, massnum=massnum)
+            if name.startswith("NUC_5"):
+                boron += toa
+            else:
+                carbon += toa
+        if np.any(carbon <= 0):
+            raise ValueError("Nonpositive carbon denominator")
+        model = boron / carbon
+        result = chisquare(obs, model, error, return_points=True)
         rows = []
-        for mode in ("p", "He", "BC"):
-            points = [(float(axis), float(vals[0]), float(vals[1]), vals[2])
-                      for axis, vals in observed[mode].items() if vals[2][0] >= limits[mode]]
-            if len(points) != counts[mode]:
-                raise ValueError(f"Unexpected observation count for {mode}")
-            axis = np.array([item[0] for item in points])
-            obs = np.array([item[1] for item in points])
-            error = np.array([item[2] for item in points])
-            model = np.zeros(len(points))
-            boron = np.zeros(len(points))
-            carbon = np.zeros(len(points))
-            phi = cfg["phi"][mode]
-            for name, charge, massnum, mass in species[mode]:
-                if mode == "BC":
-                    kinetic = axis
-                else:
-                    kinetic = (np.sqrt((charge * axis) ** 2 + mass ** 2) - mass) / massnum
-                if mode == "p":
-                    primary = data[:, columns.index("Pri_p") + 1]
-                    secondary = data[:, columns.index("Sec_p") + 1]
-                    if np.any(primary <= 0) or np.any(secondary < 0):
-                        raise ValueError("Invalid proton component")
-                    flux = (primary + secondary) / 10000
-                else:
-                    flux = data[:, columns.index(name) + 1] / 10000
-                _, toa = SM_output(energy, flux, PhiP=phi, Mass=mass / massnum,
-                                   output_energies=kinetic, charge=charge, massnum=massnum)
-                if mode == "BC":
-                    if name.startswith("NUC_5"):
-                        boron += toa
-                    else:
-                        carbon += toa
-                else:
-                    total = massnum * kinetic
-                    model += toa * charge * np.sqrt(total * (total + 2 * mass)) / (
-                        massnum * (total + mass))
-            if mode == "BC":
-                if np.any(carbon <= 0):
-                    raise ValueError("Nonpositive carbon denominator")
-                model = boron / carbon
-            result = chisquare(obs, model, error, return_points=True)
-            parts[mode] = result["chi2"]
-            for i, item in enumerate(points):
-                rows.append({
-                    "run": rec["id"], "observable": mode, "axis": item[0],
-                    "lower": item[3][0], "upper": item[3][1],
-                    "observed": obs[i], "model": model[i], "error": result["sigma"][i],
-                    "residual": result["residual"][i],
-                    "contribution": result["contribution"][i], "phi": phi,
-                })
-        total = float(sum(parts.values()))
-        if not np.isfinite(total) or total < 0:
-            raise ValueError("Invalid total chi-square")
+        for i, item in enumerate(points):
+            rows.append({
+                "run": rec["id"], "observable": "BC", "axis": item[0],
+                "lower": item[3][0], "upper": item[3][1],
+                "observed": obs[i], "model": model[i], "error": result["sigma"][i],
+                "residual": result["residual"][i],
+                "contribution": result["contribution"][i], "phi": phi,
+            })
         out = ROOT / "outputs/csv" / (rec["id"] + "-" + rec["host"] + "-residual.csv")
         out.parent.mkdir(parents=True, exist_ok=True)
         with out.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-        rec.update({"status": "scored", "components": parts, "total": total,
-                    "points": str(out), "pointsHash": file_hash(out), "count": counts})
         figures = {}
+        fit = None
         for label, script in (("BCfitting", "BCfitting.py"),
                               ("pHefitting27", "pHefitting27.py")):
             target = ROOT / "outputs/figures" / f"{rec['id']}-{rec['host']}-{label}.png"
             target.parent.mkdir(parents=True, exist_ok=True)
-            companion.run_command(
-                ["env", "-u", "PYTHONPATH", sys.executable,
-                 ROOT / "dragon_utils/plotting" / script,
-                 rec["spectrum"], "--output", target], rec["log"])
+            command = ["env", "-u", "PYTHONPATH", sys.executable,
+                       ROOT / "dragon_utils/plotting" / script,
+                       rec["spectrum"], "--output", target]
+            if label == "pHefitting27":
+                command.extend(["--fit", "--fit-min", str(cfg["fitMin"])])
+                done = companion.run_command(command, rec["log"], capture=True)
+                lines = [line.removeprefix("FIT_RESULT=") for line in done.stdout.splitlines()
+                         if line.startswith("FIT_RESULT=")]
+                if len(lines) != 1:
+                    raise ValueError("p/He fitter did not return one FIT_RESULT record")
+                fit = json.loads(lines[0])
+            else:
+                companion.run_command(command, rec["log"])
             if not target.is_file() or not target.stat().st_size:
                 raise ValueError(f"Plot was not created: {target}")
             figures[label] = {"path": str(target), "sha256": file_hash(target)}
+        if fit is None or set(fit) != {"p", "He", "fitMin"}:
+            raise ValueError("Incomplete p/He fit result")
+        if float(fit["fitMin"]) != float(cfg["fitMin"]):
+            raise ValueError("p/He fit threshold differs from the search configuration")
+        parts = {"p": float(fit["p"]["chi2"]),
+                 "He": float(fit["He"]["chi2"]),
+                 "BC": float(result["chi2"])}
+        raw = {"p": float(fit["p"]["fitraw"]),
+               "He": float(fit["He"]["fitraw"])}
+        norm = {"p": float(fit["p"]["constant"]),
+                "He": float(fit["He"]["constant"])}
+        total = float(sum(parts.values()))
+        values = [*parts.values(), *raw.values(), *norm.values(), total]
+        if (not all(np.isfinite(value) for value in values) or
+                min([*parts.values(), *raw.values(), total]) < 0 or
+                min(norm.values()) <= 0):
+            raise ValueError("Invalid fitted objective")
+        objective = f"pHe_norm{value_text(cfg['fitMin'])}_BC_v1"
+        rec.update({"status": "scored", "components": parts, "rawComponents": raw,
+                    "normalization": norm, "fitResult": fit, "fitMin": float(cfg["fitMin"]),
+                    "objective": objective, "total": total,
+                    "points": str(out), "pointsHash": file_hash(out),
+                    "count": {"p": int(fit["p"]["fitused"]),
+                              "He": int(fit["He"]["fitused"]), "BC": 40}})
         rec["plots"] = figures
+        rec.pop("error", None)
     except Exception as exc:
         rec.update({"status": "evaluation_failed", "error": str(exc), "total": None})
     Path(rec["record"]).write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
     return rec
 
 
-def save_csv(records, batch, result, proposal=None):
-    """Upsert one synchronous batch in the dated optimization table."""
+def save_csv(records, batch, result, proposal=None, date=None):
+    """Upsert scored records in one dated optimization table."""
     if not records:
         raise ValueError("No optimization records to save")
-    path = ROOT / "outputs/csv" / f"{records[0]['date']}_BayesOpt.csv"
+    date = date or records[0]["date"]
+    path = ROOT / "outputs/csv" / f"{date}_BayesOpt.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = [
         "date", "batch", "host", "stem", "status", "D0", "deltaA", "deltaB", "deltaZ",
+        "raw_p", "raw_He", "norm_p", "norm_He", "fit_min",
         "chi2_p", "chi2_He", "chi2_BC", "chi2_total", "optimizer_loss",
         "optimizer_result", "next_proposal", "z8_spectrum", "z14_spectrum",
         "BCfitting", "pHefitting27", "duration", "record",
@@ -793,7 +812,8 @@ def save_csv(records, batch, result, proposal=None):
     if path.exists():
         with path.open(newline="", encoding="utf-8") as handle:
             prior = list(csv.DictReader(handle))
-    keys = {(rec["date"], str(batch), rec["host"], rec["id"]) for rec in records}
+    prior = [{name: row.get(name, "") for name in fields} for row in prior]
+    keys = {(date, str(batch), rec["host"], rec["id"]) for rec in records}
     prior = [row for row in prior if
              (row["date"], row["batch"], row["host"], row["stem"]) not in keys]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -802,13 +822,18 @@ def save_csv(records, batch, result, proposal=None):
         writer.writerows(prior)
         for rec in records:
             parts = rec.get("components") or {}
+            raw = rec.get("rawComponents") or {}
+            norm = rec.get("normalization") or {}
             plots = rec.get("plots") or {}
             point = rec["candidate"]
             writer.writerow({
-                "date": rec["date"], "batch": batch, "host": rec["host"],
+                "date": date, "batch": batch, "host": rec["host"],
                 "stem": rec["id"], "status": rec["status"],
                 "D0": point["D0"], "deltaA": point["deltaA"],
                 "deltaB": point["deltaB"], "deltaZ": point["deltaZ"],
+                "raw_p": raw.get("p"), "raw_He": raw.get("He"),
+                "norm_p": norm.get("p"), "norm_He": norm.get("He"),
+                "fit_min": rec.get("fitMin"),
                 "chi2_p": parts.get("p"), "chi2_He": parts.get("He"),
                 "chi2_BC": parts.get("BC"), "chi2_total": rec.get("total"),
                 "optimizer_loss": rec.get("total"), "optimizer_result": result,
@@ -834,6 +859,63 @@ def get_pointsInBounds(bounds, X, y):
     
     return (bX, by)
 
+
+def load_history(cfg, seen):
+    """Re-score unique completed formal candidates without rerunning DRAGON2."""
+    accepted = {"batch_told", "history_refit", "async_told"}
+    records = []
+    tables = sorted((ROOT / "outputs/csv").glob("*_BayesOpt.csv"))
+    for table in tables:
+        with table.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        for row in rows:
+            if row.get("optimizer_result") not in accepted:
+                continue
+            path = Path(row.get("record", ""))
+            if not path.is_file():
+                raise FileNotFoundError(f"Formal optimization record is missing: {path}")
+            rec = json.loads(path.read_text(encoding="utf-8"))
+            point = rec.get("candidate")
+            if not isinstance(point, dict) or set(point) != set(cfg["seed"]):
+                raise ValueError(f"Invalid formal candidate record: {path}")
+            key = tuple(float(point[name]) for name in cfg["seed"])
+            if key in seen:
+                continue
+            for name, value in zip(cfg["seed"], key):
+                low, high = cfg["bounds"][name]
+                if not float(low) <= value <= float(high):
+                    raise ValueError(f"Historical candidate is outside current bounds: {path}")
+            spectrum = Path(rec.get("spectrum", ""))
+            if not spectrum.is_file() or file_hash(spectrum) != rec.get("spectrumHash"):
+                raise ValueError(f"Historical Z=14 spectrum is missing or changed: {path}")
+            rec["status"] = "simulated"
+            rec = obj_func(point, cfg, seen, rec=rec)
+            if rec["status"] != "scored":
+                raise RuntimeError(f"Historical candidate re-score failed: {path}: {rec.get('error')}")
+            seen.add(key)
+            records.append(rec)
+    return records
+
+
+def ask_point(opt, cfg, seen, active, issued):
+    """Ask one unique point while treating active candidates as pending."""
+    names = list(cfg["seed"])
+    pending = [[rec["candidate"][name] for name in names]
+               for rec in active.values()]
+    for retry in range(1000):
+        shadow = opt.copy(random_state=int(cfg["seedValue"]) + issued + retry)
+        if pending:
+            lie = min(opt.yi) if opt.yi else 0.0
+            shadow.tell(pending, [lie] * len(pending))
+        point = dict(zip(names, shadow.ask()))
+        key = tuple(float(point[name]) for name in names)
+        date = datetime.now(TOKYO).strftime("%Y-%m-%d")
+        stem_key = ("stem", date, *(name_text(point[name]) for name in names))
+        if key not in seen and stem_key not in seen:
+            return point, issued + retry + 1
+    raise RuntimeError("Optimizer could not produce a unique candidate")
+
+
 # %%
 def main():
     parser = argparse.ArgumentParser()
@@ -849,8 +931,10 @@ def main():
     if list(cfg["seed"]) != names:
         raise ValueError("Seed order must be D0, deltaA, deltaB, deltaZ")
     if list(cfg["hosts"]) != ["companion", "yellowgiant"]:
-        raise ValueError("The synchronous host order must be companion, yellowgiant")
-    cfg["date"] = datetime.now().astimezone().strftime("%Y-%m-%d")
+        raise ValueError("The host order must be companion, yellowgiant")
+    if not np.isfinite(cfg.get("fitMin", np.nan)) or float(cfg["fitMin"]) < 0:
+        raise ValueError("fitMin must be finite and nonnegative")
+    cfg["date"] = datetime.now(TOKYO).strftime("%Y-%m-%d")
     base = str(ROOT / "data/experiment_data/expdata") + "/"
     observed = {
         "p": readamsproflxvals(base, convtoE=False),
@@ -875,7 +959,7 @@ def main():
         raise ValueError("Z=14/Z=8 coefficient table lacks required columns")
     seen = set()
     if args.check:
-        records = [submit_task(cfg["seed"], cfg, seen, host, dry=True)
+        records = [submit_task(cfg["seed"], cfg, set(), host, dry=True)
                    for host in cfg["hosts"]]
         print(json.dumps({"status": "passed", "records": [rec["record"] for rec in records],
                           "observations": counts}, indent=2), flush=True)
@@ -933,7 +1017,7 @@ def main():
                 path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
                 records.append(rec)
         else:
-            records = [submit_task(cfg["seed"], cfg, seen, host)
+            records = [submit_task(cfg["seed"], cfg, set(), host)
                        for host in cfg["hosts"]]
         records = [rec if rec["status"] in {"simulated", "scored"} else collect_task(rec)
                    for rec in records]
@@ -958,34 +1042,87 @@ def main():
     bounds = cfg.get("bounds")
     if not isinstance(bounds, dict) or list(bounds) != names:
         raise ValueError("Set linear bounds for D0, deltaA, deltaB, deltaZ before a full search")
-    if args.calls is None or args.calls < 2 or args.calls % 2:
-        raise ValueError("--calls must be a positive even number")
+    if args.calls is None or args.calls < 1:
+        raise ValueError("--calls must be a positive global candidate count")
     for name, pair in bounds.items():
         if len(pair) != 2 or not float(pair[0]) < float(pair[1]):
             raise ValueError(f"Invalid linear bounds: {name}")
     opt = Optimizer([Real(*bounds[name], prior="uniform", name=name) for name in names],
                     base_estimator="GP", n_initial_points=int(cfg["nInitial"]),
                     random_state=cfg["seedValue"], avoid_duplicates=True)
-    points = [dict(cfg["seed"]), dict(zip(names, opt.ask()))]
-    for batch in range(1, args.calls // 2 + 1):
-        records = [submit_task(point, cfg, seen, host)
-                   for point, host in zip(points, cfg["hosts"])]
-        records = [collect_task(rec) for rec in records]
-        records = [obj_func(point, cfg, seen, rec=rec)
-                   for point, rec in zip(points, records)]
-        if any(rec["status"] != "scored" for rec in records):
-            save_csv(records, batch, "batch_failed; no_next_proposal")
-            raise RuntimeError("Synchronous batch failed; optimizer was not updated")
-        opt.tell([[point[name] for name in names] for point in points],
-                 [rec["total"] for rec in records])
-        proposal = None
-        if batch < args.calls // 2:
-            proposal = [dict(zip(names, item))
-                        for item in opt.ask(n_points=2, strategy="cl_min")]
-        table = save_csv(records, batch, "batch_told", proposal)
-        print(f"Batch {batch} completed: {table}", flush=True)
-        if proposal is not None:
-            points = proposal
+    history = load_history(cfg, seen)
+    if len(history) > args.calls:
+        raise ValueError(f"--calls={args.calls} is below {len(history)} completed formal candidates")
+    for index, rec in enumerate(history, 1):
+        point = rec["candidate"]
+        opt.tell([point[name] for name in names], rec["total"])
+        save_csv([rec], f"history-{index:03d}", "history_refit", date=cfg["date"])
+    if history:
+        best = min(history, key=lambda item: item["total"])
+        print(f"Best: {point_text(best['candidate'])} chi2={name_text(best['total'])}",
+              flush=True)
+    if len(history) == args.calls:
+        print(f"Global target already reached: {args.calls} candidates", flush=True)
+        return
+
+    active = {}
+    issued = 0
+    completed = len(history)
+    event = 0
+    for host in cfg["hosts"]:
+        if completed + len(active) >= args.calls:
+            break
+        point, issued = ask_point(opt, cfg, seen, active, issued)
+        active[host] = submit_task(point, cfg, seen, host)
+        print(f"Assigned {host}: {point_text(point)}", flush=True)
+
+    while active:
+        for host in cfg["hosts"]:
+            rec = active.get(host)
+            if rec is None:
+                print(f"{host}: idle", flush=True)
+            else:
+                print(f"{host} {rec['id']}: {rec['status']}", flush=True)
+        if opt.yi:
+            best = int(np.argmin(opt.yi))
+            point = dict(zip(names, opt.Xi[best]))
+            print(f"Best: {point_text(point)} chi2={name_text(opt.yi[best])}", flush=True)
+        else:
+            print("Best: unavailable", flush=True)
+        changed = False
+        for host in list(active):
+            rec = collect_task(active[host], once=True, quiet=True)
+            active[host] = rec
+            if rec["status"] in {"launching", "running", "finalizing"}:
+                continue
+            changed = True
+            del active[host]
+            point = rec["candidate"]
+            rec = obj_func(point, cfg, seen, rec=rec)
+            event += 1
+            proposal = None
+            if rec["status"] == "scored":
+                opt.tell([point[name] for name in names], rec["total"])
+                completed += 1
+                result = "async_told"
+            else:
+                result = "async_failed"
+            if completed + len(active) < args.calls:
+                proposal, issued = ask_point(opt, cfg, seen, active, issued)
+                active[host] = submit_task(proposal, cfg, seen, host)
+                print(f"Assigned {host}: {point_text(proposal)}", flush=True)
+            table = save_csv([rec], f"run-{event:03d}", result, proposal,
+                             date=cfg["date"])
+            print(f"{host} {result}: {completed}/{args.calls}; {table}", flush=True)
+        if not changed and active:
+            time.sleep(20)
+
+    if len(opt.yi) != args.calls:
+        raise RuntimeError(f"Optimization stopped at {len(opt.yi)}/{args.calls} scored candidates")
+    best = int(np.argmin(opt.yi))
+    winner = dict(zip(names, opt.Xi[best]))
+    print(f"Optimization completed: {point_text(winner)} chi2={name_text(opt.yi[best])}",
+          flush=True)
 
 if __name__ == "__main__":
     main()

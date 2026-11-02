@@ -42,10 +42,10 @@ search:
     deltaB: [0.01, 0.35]
     deltaZ: [0.1, 0.3]
   seed:
-    D0: 2.6
-    deltaA: 0.0
-    deltaB: 0.01
-    deltaZ: 0.2
+    D0: 2.5
+    deltaA: 0.006590730324193478
+    deltaB: 0.22610273490921926
+    deltaZ: 0.23426486256895399
   fixed:
     DiffusionThreshold: 8.3
     DiffusionThresholdZ: 0.0
@@ -60,6 +60,7 @@ search:
       threads: 32
   seedValue: 17
   nInitial: 10
+  fitMin: 30.0
   phi:
     p: 0.64
     He: 0.64
