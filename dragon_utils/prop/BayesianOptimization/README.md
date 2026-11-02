@@ -4,15 +4,15 @@
 
 ## BayesOpt.py
 
-当前 main 是四参数远程贝叶斯接口，搜索 `D0`、`deltaA`、`deltaB`、`deltaZ`，四维均为线性空间。正式边界依次为 `D0=[2.5, 3.0]`、`deltaA=[0, 0.05]`、`deltaB=[0.01, 0.35]`、`deltaZ=[0.1, 0.3]`。基准输入固定为 `data/processed/2026-10-28_BayesianOptimization_O.xml`，下一次起点记录为当前最优 `D0=2.5`、`deltaA=0.006590730324193478`、`deltaB=0.22610273490921926`、`deltaZ=0.23426486256895399`；候选把 `DiffusionThreshold=8.3`、`DiffusionThresholdZ=0` 固定且只使用 `Zmax=8`。候选名为 `YYYY-MM-DD_BayesOpt_D<值>_dA<值>_dB<值>_dZ<值>`，日期取该候选 XML 实际生成时的 Asia/Tokyo 日期，跨午夜后新 XML 使用新日期；名称中的四个参数最多保留 4 位有效数字，但 XML、JSON、CSV 和优化器内部仍保存完整浮点精度。XML 与同名丰度表保存在 `data/processed/`。
+当前 main 是五参数远程贝叶斯接口，搜索 `D0`、`deltaA`、`deltaB`、`deltaZ`、`alpha`，五维均为线性空间。正式边界依次为 `D0=[2.5, 3.0]`、`deltaA=[0, 0.05]`、`deltaB=[0.01, 0.35]`、`deltaZ=[0.1, 0.3]`、`alpha=[2, 3]`。基准输入固定为 `data/processed/2026-10-28_BayesianOptimization_O.xml`，下一次起点记录为当前最优 `D0=2.5`、`deltaA=0.00947233623678073`、`deltaB=0.09557504471341971`、`deltaZ=0.28315688974115694`、`alpha=2.3`；每个候选把 `InjectionIndexAllNuclei` 下的 `alpha_0` 至 `alpha_3` 写成同一个 `alpha`，不改变 `rho_0` 至 `rho_2`，因此不引入 injection breaking。候选还把 `DiffusionThreshold=8.3`、`DiffusionThresholdZ=0` 固定且只使用 `Zmax=8`。候选名为 `YYYY-MM-DD_BayesOpt_D<值>_dA<值>_dB<值>_dZ<值>_a<值>`，日期取该候选 XML 实际生成时的 Asia/Tokyo 日期，跨午夜后新 XML 使用新日期；名称中的五个参数最多保留 4 位有效数字，但 XML、JSON、CSV 和优化器内部仍保存完整浮点精度。XML 与同名丰度表保存在 `data/processed/`。
 
-输入输出与限制：读取同目录 `config.yaml` 的 `search` 配置。`--check` 只生成并检查两台主机的本地候选记录；`--test` 在 companion 与 yellowgiant 各运行一次相同起点，等两边均完成、回传和评分后停止，不提出下一批；`--resume-test` 只从两台主机已有且 token 匹配的本轮状态续取、评分和作图，绝不重新启动 DRAGON。正式搜索使用全局成功候选总数 `--calls N`，不再要求偶数。启动时会读取历史总表中 `batch_told`、`history_refit`、`async_told` 的唯一正式候选，用已有 Z=14 谱按当前口径重新评分并写入当日总表；这些候选计入 N，失败、测试和取消记录不计入，也不会重跑 DRAGON。
+输入输出与限制：读取同目录 `config.yaml` 的 `search` 配置。`--check` 只生成并检查四台主机的本地候选记录；`--test` 在 companion、yellowgiant、bluegiant、redgiant 各运行一次相同起点，等四边均完成、回传和评分后停止，不提出下一批；`--resume-test` 只从四台主机已有且 token 匹配的本轮状态续取、评分和作图，绝不重新启动 DRAGON。正式搜索使用全局成功候选总数 `--calls N`，不要求是主机数的倍数。启动时会读取历史总表中 `batch_told`、`history_refit`、`async_told` 的唯一正式候选，用已有 Z=14 谱按当前口径重新评分并写入当日总表；旧四维记录从其 XML 核验 `alpha_0` 至 `alpha_3` 完全相同后，以该值升为五维历史点，当前24个历史候选均对应 `alpha=2.3`。这些候选计入 N，失败、测试和取消记录不计入，也不会重跑 DRAGON。
 
-正式调度是双主机异步共享优化池：任一主机完成、回传和评分后，其结果立即 `tell` 给同一个优化器并为该主机生成下一点，不等待另一台；尚未完成的候选以当前最小目标值作为 constant-liar 临时加入提议模型。历史、已提交和运行中的候选统一全局去重。历史重新评分后的最优点作为优化器 incumbent，不重复模拟该点。
+正式调度是四主机异步共享优化池：任一主机完成、回传和评分后，其结果立即 `tell` 给同一个优化器并为该主机生成下一点，不等待其他主机；尚未完成的候选以当前最小目标值作为 constant-liar 临时加入提议模型。历史、已提交和运行中的候选统一全局去重。历史重新评分后的最优点作为优化器 incumbent，不重复模拟该点。
 
 每个 Z=8 ASCII 谱按 `data/2026-10-28_z14-z8-coefficient.csv` 的相同能量和列逐点相乘，得到带主机后缀的 `-z14.txt`；只有 Z=14 预测进入评分。B/C 保留固定 0.64 GV 调制及原有 χ²；p 和 He 分别在 `R>=30 GV` 拟合正的整体通量常数 `C_p`、`C_He`，优化目标使用归一化后的 p、He χ²与 B/C χ²之和。每个成功候选都生成 `BCfitting` 诊断图和带拟合曲线、常数及 χ²的 `pHefitting27` 图。原始 TXT/FITS 在 `data/dragon_output/`，图片在 `outputs/figures/`，B/C 残差和总表在 `outputs/csv/`，详细记录在 `outputs/bayes/`，全部保留候选主体并以主机后缀区分。优化总表为 `YYYY-MM-DD_BayesOpt.csv`，记录原始/拟合 p、He χ²、`C_p`、`C_He`、B/C 与总 χ²、参数、状态、下一提议及产物路径。
 
-远程接口使用 SSH alias `companion` 与 `yellowgiant`，程序目录均为 `/home/ljiayi/dragon/DRAGON2-Beta_version-master`，编译线程分别为 48 与 32。任务复用 `scripts/run_companion.py` 的断线存活 worker 和哈希状态；不设置 Python 侧的联合 `delta` 上限约束，DRAGON2 自身仍可拒绝无效输入。包装器把正式搜索主控放入固定 session `BayesOpt`；companion 与 yellowgiant 日志分别使用固定 session `companion_log`、`yellowgiant_log`。三个 session 都只使用各自的单一窗口；新批次通过 `respawn-pane` 在原窗格替换日志跟随命令并清空旧历史，不新建窗口。`BayesOpt` 每个轮询周期依次输出两台主机的当前任务状态和一行 `Best:`，其中最佳参数与 χ²均最多显示 4 位有效数字。
+远程接口使用 SSH alias `companion`、`yellowgiant`、`bluegiant` 与 `redgiant`，程序目录均为 `/home/ljiayi/dragon/DRAGON2-Beta_version-master`；companion 配置48线程，其余三台沿用 yellowgiant 的32线程配置。bluegiant 与 redgiant 的系统 Python 3.8 保持不变，worker 显式使用用户目录 `/home/ljiayi/.local/python3.12.3/bin/python3.12`，与 yellowgiant 的 Python 3.12.3 对齐。任务复用 `scripts/run_companion.py` 的断线存活 worker 和哈希状态；不设置 Python 侧的联合 `delta` 上限约束，DRAGON2 自身仍可拒绝无效输入。包装器把正式搜索主控放入固定 session `BayesOpt`；四台主机日志分别使用固定 session `companion_log`、`yellowgiant_log`、`bluegiant_log`、`redgiant_log`。五个 session 都只使用各自的单一窗口；新批次通过 `respawn-pane` 在原窗格替换日志跟随命令并清空旧历史，不新建窗口。`BayesOpt` 每个轮询周期依次输出四台主机的当前任务状态和一行 `Best:`，其中最佳参数与 χ²均最多显示 4 位有效数字。
 
 示例：
 
@@ -24,6 +24,8 @@ bash dragon_utils/prop/BayesianOptimization/start_BayesOpt.sh --calls 100
 tmux attach -t BayesOpt
 tmux attach -t companion_log
 tmux attach -t yellowgiant_log
+tmux attach -t bluegiant_log
+tmux attach -t redgiant_log
 ```
 
 主要接口：`update_data`, `load_data`, `top_results`, `closest_points`, `filter_points`, `get_distances`, `get_farthest_point`, `submit_task`, `determine_bounds`, `load_previous_data` 等（完整签名见源码）。

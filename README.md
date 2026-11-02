@@ -26,7 +26,7 @@ Recommended entry points:
 - `scripts/zgrid_convergence.py`: offline vertical-grid convergence analysis using existing TXT spectra.
 - `dragon_utils/xml_manager/`: XML parameter reading and modification interfaces.
 
-`dragon_utils/prop/BayesianOptimization/BayesOpt.py` is the active asynchronous companion/yellowgiant four-parameter search entry point. Both hosts share one optimizer history and receive globally unique candidates as soon as each becomes idle. Its directory README documents fitted p/He scoring, historical re-scoring, the Z=8 to Z=14 correction, outputs, and test mode. The other `dragon_utils/prop/` areas remain research prototypes that may depend on historical paths or external environments.
+`dragon_utils/prop/BayesianOptimization/BayesOpt.py` is the active asynchronous five-parameter search entry point for companion, yellowgiant, bluegiant, and redgiant. All four hosts share one optimizer history and receive globally unique candidates as soon as each becomes idle. The search varies D0, deltaA, deltaB, deltaZ, and one common all-nuclei injection alpha without a spectral break. Its directory README documents fitted p/He scoring, historical re-scoring, the Z=8 to Z=14 correction, outputs, and test mode. The other `dragon_utils/prop/` areas remain research prototypes that may depend on historical paths or external environments.
 
 ## Requirements
 

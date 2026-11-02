@@ -281,12 +281,12 @@ def new_log():
             now += timedelta(seconds=1)
 
 
-def rpc(op, stem, log, host=companion.HOST, **kwargs):
+def rpc(op, stem, log, host=companion.HOST, python="python3", **kwargs):
     """Call one logged remote operation with quoted arguments."""
     request = dict(op=op, path=str(BASE / "outputs/workflow" / (stem + ".json")), **kwargs)
     if op == "launch":
         request["code"] = REMOTE
-    done = companion.execute(["python3", "-c", REMOTE, json.dumps(request)], log,
+    done = companion.execute([python, "-c", REMOTE, json.dumps(request)], log,
                              host=host, capture=True)
     return json.loads(done.stdout)
 

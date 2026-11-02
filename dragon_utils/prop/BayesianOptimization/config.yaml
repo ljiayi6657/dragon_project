@@ -31,7 +31,7 @@ paths:                                        # paths to files/folders used by t
   # dragondata_path: "/home/ehanser/CALETana/astro/CALplots/fitspectra-SiP_fitsaveCAL_NV_Be_CHe-5.0.dat"
   # dragonbkg_path: "/home/ehanser/dragon_calet/dragonbkg_Si.py"
 
-# Active four-parameter remote search. Set bounds before a non-test search.
+# Active five-parameter remote search. Set bounds before a non-test search.
 search:
   base: /home/ljiayi/dragon_project/data/processed/2026-10-28_BayesianOptimization_O.xml
   source: /home/ljiayi/DRAGON2-Beta_version-master/config_files/template.source.param
@@ -41,21 +41,35 @@ search:
     deltaA: [0.0, 0.05]
     deltaB: [0.01, 0.35]
     deltaZ: [0.1, 0.3]
+    alpha: [2.0, 3.0]
   seed:
     D0: 2.5
-    deltaA: 0.006590730324193478
-    deltaB: 0.22610273490921926
-    deltaZ: 0.23426486256895399
+    deltaA: 0.00947233623678073
+    deltaB: 0.09557504471341971
+    deltaZ: 0.28315688974115694
+    alpha: 2.3
   fixed:
     DiffusionThreshold: 8.3
     DiffusionThresholdZ: 0.0
   hosts:
     companion:
       ssh: companion
+      python: /usr/bin/python3
       program: /home/ljiayi/dragon/DRAGON2-Beta_version-master
       threads: 48
     yellowgiant:
       ssh: yellowgiant
+      python: /usr/bin/python3
+      program: /home/ljiayi/dragon/DRAGON2-Beta_version-master
+      threads: 32
+    bluegiant:
+      ssh: bluegiant
+      python: /home/ljiayi/.local/python3.12.3/bin/python3.12
+      program: /home/ljiayi/dragon/DRAGON2-Beta_version-master
+      threads: 32
+    redgiant:
+      ssh: redgiant
+      python: /home/ljiayi/.local/python3.12.3/bin/python3.12
       program: /home/ljiayi/dragon/DRAGON2-Beta_version-master
       threads: 32
   seedValue: 17

@@ -17,7 +17,7 @@
 
 ## 2. Directory Structure & File Paths
 
-* **Dragon Executable**: 本机 `/home/ljiayi/DRAGON2-Beta_version-master/DRAGON`；companion 与 yellowgiant 均为 `/home/ljiayi/dragon/DRAGON2-Beta_version-master/DRAGON`，从各程序目录调用启动器。
+* **Dragon Executable**: 本机 `/home/ljiayi/DRAGON2-Beta_version-master/DRAGON`；companion、yellowgiant、bluegiant、redgiant 均为 `/home/ljiayi/dragon/DRAGON2-Beta_version-master/DRAGON`，从各程序目录调用启动器。
 * **DRAGON Output Data (`.txt`, `.fits.gz`)**: `~/dragon_project/data/dragon_output/`
 * **Experiment data**: `~/dragon_project/data/experiment_data/`
 * **Processed Data**: `~/dragon_project/data/processed/`，包括输入/生成 XML 与同主体 `.source.param`。
@@ -42,34 +42,34 @@
 
 * **SSH Address**: alias `yellowgiant`，即 `ljiayi@192.168.72.45`。
 * yellowgiant 当前 DRAGON2 构建为 32 个 OpenMP 线程，使用与 companion 相同的物理源码、默认丰度表、程序目录和 CFITSIO 4.7.0 路径；二进制因线程数不同而不同。
-* yellowgiant 的物理内存限制要求 BayesianOptimization 候选使用 `Zmax=8`。两台主机的 Z=8 ASCII 谱均按 `data/2026-10-28_z14-z8-coefficient.csv` 逐能量、逐列转换为 Z=14 预测，只有该预测进入太阳调制和评分。
-* BayesianOptimization 使用异步双主机共享优化池：companion 或 yellowgiant 任一完成、回传、Z=14 转换和评分后立即更新同一优化器并领取下一候选，不等待另一台；运行中候选以 constant-liar 计入提议且全局去重。
+* yellowgiant 的物理内存限制要求 BayesianOptimization 候选统一使用 `Zmax=8`。四台主机的 Z=8 ASCII 谱均按 `data/2026-10-28_z14-z8-coefficient.csv` 逐能量、逐列转换为 Z=14 预测，只有该预测进入太阳调制和评分。
+* BayesianOptimization 使用异步四主机共享优化池：companion、yellowgiant、bluegiant、redgiant 任一完成、回传、Z=14 转换和评分后立即更新同一优化器并领取下一候选，不等待其他主机；运行中候选以 constant-liar 计入提议且全局去重。
 
 ### Bluegiant Compute Host
 
 * **SSH Address**: alias `bluegiant`，即 `ljiayi@192.168.72.46`；使用 `ssh bluegiant` 免密连接。
 * **Operating System**: Ubuntu 20.04。
-* bluegiant 的硬件配置与 yellowgiant 完全相同。
+* bluegiant 的硬件配置、BayesianOptimization 程序目录、项目绝对路径与32线程构建配置均与 yellowgiant 相同。系统 Python 保持3.8不变；BayesianOptimization 远端 worker 使用用户目录 `/home/ljiayi/.local/python3.12.3/bin/python3.12`，与 yellowgiant 的 Python 3.12.3 对齐。
 
 ### Redgiant Compute Host
 
 * **SSH Address**: alias `redgiant`，即 `ljiayi@192.168.72.47`；使用 `ssh redgiant` 免密连接。
 * **Operating System**: Ubuntu 20.04。
-* redgiant 的硬件配置与 yellowgiant 完全相同。
+* redgiant 的硬件配置、BayesianOptimization 程序目录、项目绝对路径与32线程构建配置均与 yellowgiant 相同。系统 Python 保持3.8不变；BayesianOptimization 远端 worker 使用用户目录 `/home/ljiayi/.local/python3.12.3/bin/python3.12`，与 yellowgiant 的 Python 3.12.3 对齐。
 
 
 ## 3. Execution & Logging Rules
 
 * **Dragon/Dragon2 Logs**: Every time `dragon` or `dragon2` is executed, copy all output logs into `~/dragon_project/logs/`.
   * Naming format: `YYYY-MM-DD_HH-MM-SS.md`.
-  * 单轮 companion 入口每次新计算启动后，在 muon 自动创建或复用 `dragon_log` tmux 会话并新增本轮窗口。BayesianOptimization 是明确例外：主控固定使用 `BayesOpt:main.0`，两台主机日志分别固定使用 `companion_log:log.0`、`yellowgiant_log:log.0`；新批次只 respawn 对应窗格、清空上一轮日志历史，不新建窗口。日志查看失败只警告，不取消模型；无模拟预检不创建日志窗口。
+  * 单轮 companion 入口每次新计算启动后，在 muon 自动创建或复用 `dragon_log` tmux 会话并新增本轮窗口。BayesianOptimization 是明确例外：主控固定使用 `BayesOpt:main.0`，四台主机日志分别固定使用 `companion_log:log.0`、`yellowgiant_log:log.0`、`bluegiant_log:log.0`、`redgiant_log:log.0`；新批次只 respawn 对应窗格、清空上一轮日志历史，不新建窗口。日志查看失败只警告，不取消模型；无模拟预检不创建日志窗口。
   * 运算结束并取回日志后，`run`、`fetch` 在脚本终端各打印一次 DRAGON 原生的 `Solution found in ... s.` 文本，并记录 `duration`；禁止用 Python 或开始/结束时间差替代该耗时。原生耗时行缺失时如实报告，不编造。
 * **DRAGON/DRAGON2 XML Parameters**:
   * All XML parameter files used, created, or stored by any task for DRAGON/DRAGON2 calculations must be kept in `/home/ljiayi/dragon_project/data/processed/`.
   * companion 单轮输入、原始模拟数据及状态记录统一主体 `YYYY-MM-DD_dimZ<N>`，不按图的种类分类，不接收 `--task`；N 是 XML 的实际整数 DimZ。优先读取用户 XML 同目录同主体的 `.source.param`；该文件缺失时使用固定默认表 `/home/ljiayi/DRAGON2-Beta_version-master/config_files/template.source.param`。所选表按字节复制成 `data/processed/<stem>.source.param`，与规范 XML 同目录同主体并一同上传；预览/状态记录 `sourceDefault`、实际来源及 SHA256，使用默认表时终端和命令日志注明来源。同名表存在但无效时不得替换；默认表缺失/无效仍报错。不改动原始 XML 或丰度模板。
   * 先完成本机规范 XML/丰度副本的全部复制及哈希、DimZ 核验，再上传这些副本；远端只用 `runXml` 指定的规范 XML 启动 DRAGON2，启动前核验上传文件名、同名丰度表、实际 DimZ、本轮主体与哈希一致。终端/命令日志显示本机准备路径、DimZ、远端启动路径，不依赖原文件名中的旧 DimZ。
   * 两张图片仍使用下述 BCratio/pHe 名称，允许图片主体中的两个下划线，覆盖旧单下划线限制；其他新变量、函数及文件名仍遵守原限制。
-  * BayesianOptimization 候选按用户指定主体 `YYYY-MM-DD_BayesOpt_D<值>_dA<值>_dB<值>_dZ<值>` 命名；该主体的多个下划线是显式例外。日期取候选 XML 实际生成时的 Asia/Tokyo 日期，不能固定为整个优化启动日；名称中的参数值最多保留 4 位有效数字，XML、JSON、CSV 与优化器内部数值保持完整精度。候选 XML 与同名丰度表在 `data/processed/`，主机交叉结果以连字符主机后缀区分。
+  * BayesianOptimization 候选按用户指定主体 `YYYY-MM-DD_BayesOpt_D<值>_dA<值>_dB<值>_dZ<值>_a<值>` 命名；该主体的多个下划线是显式例外。`a` 是 `InjectionIndexAllNuclei` 下 `alpha_0` 至 `alpha_3` 的共同值，保留但不调整 `rho_0` 至 `rho_2`，不引入 injection breaking。日期取候选 XML 实际生成时的 Asia/Tokyo 日期，不能固定为整个优化启动日；名称中的参数值最多保留 4 位有效数字，XML、JSON、CSV 与优化器内部数值保持完整精度。候选 XML 与同名丰度表在 `data/processed/`，主机交叉结果以连字符主机后缀区分。
   * Asia/Tokyo 日期在每轮启动时固定，跨午夜不变。同日同 DimZ 使用统一状态与锁，重新运行直接覆盖对应的输入副本、状态、数据和图片；`fetch`、`plot` 同样直接替换对应文件，无需 `--overwrite`（旧参数仅作兼容）。仍拒绝并发提交以及覆盖 `prepared/launching/running/finalizing/unknown` 远端任务，日志每轮独立保留。不静默增加 UUID 或额外时间戳。历史 BCratio/pHe 主体仍可用于 `fetch`、`plot`，不自动改名或重算。
   * 原始 ASCII/fullstore FITS 归档到 `data/dragon_output/<stem>.txt` / `<stem>.fits.gz`；partialstore 原生 `<stem>_spectrum.fits.gz` 映射为 `<stem>-spectrum.fits.gz`，记录原始与归档名称。派生文件用简洁连字符后缀，区分空间分布与太阳位置谱。
   * ASCII 与 XML 开启的 fullstore/partialstore FITS 同轮生成、核验并回传；入口完成后明确打印所有已回传原始数据的本机路径。DRAGON 只打印 ASCII 写入提示不代表 FITS 缺失；入口不自动修改 XML 输出开关。
@@ -135,7 +135,7 @@ Read and apply this section **only when the user explicitly mentions this resear
 | `dragon_utils/plotting/pHefitting27.py` | 对比：`python3 .../pHefitting27.py <txt> [--output <png>]`；归一化拟合：追加 `--fit [--fit-min <GV>]`；默认图分别为 `YYYY-MM-DD_pHe27.png`、`YYYY-MM-DD_pHefit.png` | companion 默认仍为不拟合的 R^2.7 展示版；三图仅显示 R>5 GV；`--fit` 默认以 R≥10 GV 分别拟合整体 p/He TOA 常数，解析解经六点邻域网格验证，图内标注常数与 χ²并输出唯一 `FIT_RESULT=<JSON>`；不改 XML/丰度、不运行 DRAGON |
 | `dragon_utils/data_processing/{flux,physics,statistic_analysis}.py` | 导入 `interp`、`SM_output`、`chisquare`、`fit_constant` | 推荐插值、调制和统计工具；`fit_constant` 给单一正乘法常数的解析解并可验证邻域扫描；保留既有单位/口径 |
 | `dragon_utils/xmltools.py`、旧 `readDRAGON.py`、`CALETana_functions/` | 见各目录唯一 README | 历史或实验性接口，不替代推荐入口 |
-| `dragon_utils/prop/BayesianOptimization/BayesOpt.py` | `bash dragon_utils/prop/BayesianOptimization/start_BayesOpt.sh --check`；双主机一轮测试用 `--test`；已有远端成功状态只续取用 `--resume-test`；正式搜索用全局成功候选总数 `--calls N` | 从指定 Zmax=8 XML 搜索 D0/deltaA/deltaB/deltaZ，固定 DiffusionThresholdZ=0；历史正式候选离线重新评分并计入总数，最优历史点作为 incumbent；候选名称按 XML 生成日并将参数限制为最多 4 位有效数字，物理值保持完整精度；companion/yellowgiant 异步共享优化池、运行点 constant-liar 与全局去重；Z=14 系数修正、R≥30 GV 独立归一化后的 p/He χ²加 B/C χ²、每候选双图与 `outputs/csv/YYYY-MM-DD_BayesOpt.csv`；`BayesOpt` 每周期显示双机状态及 4 位有效数字的当前最佳；正式主控和双机日志分别固定使用三个单窗口 session |
+| `dragon_utils/prop/BayesianOptimization/BayesOpt.py` | `bash dragon_utils/prop/BayesianOptimization/start_BayesOpt.sh --check`；四主机一轮测试用 `--test`；已有远端成功状态只续取用 `--resume-test`；正式搜索用全局成功候选总数 `--calls N` | 从指定 Zmax=8 XML 搜索 D0/deltaA/deltaB/deltaZ/共同 nuclei alpha，固定 DiffusionThresholdZ=0；旧四维历史从 XML 核验共同 alpha 后升为五维、离线重新评分并计入总数，最优历史点作为 incumbent；候选名称按 XML 生成日并将参数限制为最多 4 位有效数字，物理值保持完整精度；companion/yellowgiant/bluegiant/redgiant 异步共享优化池、运行点 constant-liar 与全局去重；Z=14 系数修正、R≥30 GV 独立归一化后的 p/He χ²加 B/C χ²、每候选双图与 `outputs/csv/YYYY-MM-DD_BayesOpt.csv`；`BayesOpt` 每周期显示四主机状态及 4 位有效数字的当前最佳；正式主控和四主机日志分别固定使用五个单窗口 session |
 | `dragon_utils/prop/` 其他目录 | 见各子目录 README | 独立优化/代理模型实验；其他包含旧自动提交链路，不由 companion 或 BayesOpt 入口调用 |
 | 旧 `/home/ljiayi/Scripts/calcDRAGONauto.py`、`calcmodlist.txt` 与 `optim_copy.py` | 历史队列/自动搜索 | 与单轮任务独立，禁止向旧队列提交或部署新轮询流程 |
 

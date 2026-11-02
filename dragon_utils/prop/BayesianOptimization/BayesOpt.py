@@ -234,7 +234,7 @@ def name_text(value):
 def point_text(point):
     """Format one optimizer point for compact monitoring output."""
     return " ".join(f"{name}={name_text(point[name])}"
-                    for name in ("D0", "deltaA", "deltaB", "deltaZ"))
+                    for name in ("D0", "deltaA", "deltaB", "deltaZ", "alpha"))
 
 
 def make_stem(point, date):
@@ -242,14 +242,16 @@ def make_stem(point, date):
     return (f"{date}_BayesOpt_D{name_text(point['D0'])}"
             f"_dA{name_text(point['deltaA'])}"
             f"_dB{name_text(point['deltaB'])}"
-            f"_dZ{name_text(point['deltaZ'])}")
+            f"_dZ{name_text(point['deltaZ'])}"
+            f"_a{name_text(point['alpha'])}")
 
 
 def submit_task(point, cfg, seen, host, dry=False):
     names = list(cfg["seed"])
     if set(point) != set(names):
-        raise ValueError("Candidate names must match the four-parameter seed")
+        raise ValueError("Candidate names must match the five-parameter seed")
     point = {name: float(point[name]) for name in names}
+    alphas = ("nucAlpha0", "nucAlpha1", "nucAlpha2", "nucAlpha3")
     bounds = cfg.get("bounds")
     for name, value in point.items():
         if not np.isfinite(value):
@@ -258,8 +260,9 @@ def submit_task(point, cfg, seen, host, dry=False):
             low, high = bounds[name]
             if not low <= value <= high:
                 raise ValueError(f"Out-of-range candidate: {name}={value}")
-    if point["D0"] <= 0 or point["deltaA"] < 0 or point["deltaB"] <= 0 or point["deltaZ"] < 0:
-        raise ValueError("D0/deltaB must be positive and deltaA/deltaZ non-negative")
+    if (point["D0"] <= 0 or point["deltaA"] < 0 or point["deltaB"] <= 0 or
+            point["deltaZ"] < 0 or point["alpha"] <= 0):
+        raise ValueError("D0/deltaB/alpha must be positive and deltaA/deltaZ non-negative")
     if host not in cfg["hosts"]:
         raise KeyError(f"Unknown compute host: {host}")
     date = datetime.now(TOKYO).strftime("%Y-%m-%d")
@@ -282,7 +285,8 @@ def submit_task(point, cfg, seen, host, dry=False):
     param_path = processed / f"{stem}.source.param"
     diff_path = out / f"{stem}.diff"
     rec_path = out / f"{stem}-{host}.json"
-    updates = {name: value_text(value) for name, value in point.items()}
+    updates = {name: value_text(value) for name, value in point.items() if name != "alpha"}
+    updates.update({name: value_text(point["alpha"]) for name in alphas})
     updates.update({name: value_text(value) for name, value in cfg["fixed"].items()})
     if not xml_path.exists():
         modify_xml(base, updates, xml_path, diff_path)
@@ -301,6 +305,9 @@ def submit_task(point, cfg, seen, host, dry=False):
         if name in point:
             if float(value) != point[name]:
                 raise ValueError(f"Candidate was quantized: {name}")
+        elif name in alphas:
+            if float(value) != point["alpha"]:
+                raise ValueError(f"Nuclei injection slopes differ from alpha: {name}")
         elif name in cfg["fixed"]:
             expected = float(cfg["fixed"][name])
             fixed[name] = value
@@ -324,7 +331,11 @@ def submit_task(point, cfg, seen, host, dry=False):
     if min(values[0], values[1], values[2], values[4]) < 0 or values[3] <= 0:
         raise ValueError("Invalid 3D VariableDelta input")
     for name in (*point, *cfg["fixed"]):
-        set_param(run_doc, name, get_param(base_doc, name))
+        if name == "alpha":
+            for item in alphas:
+                set_param(run_doc, item, get_param(base_doc, item))
+        else:
+            set_param(run_doc, name, get_param(base_doc, name))
     if render_xml(run_doc) != render_xml(base_doc):
         raise ValueError("A non-search XML setting changed")
 
@@ -337,6 +348,7 @@ def submit_task(point, cfg, seen, host, dry=False):
                              archive=stem + "-spectrum.fits.gz", kind="solar"))
     target = cfg["hosts"][host]
     ssh = target["ssh"]
+    python = target.get("python", "python3")
     program = Path(target["program"])
     state_key = stem + "-" + host
     rec = {
@@ -346,6 +358,7 @@ def submit_task(point, cfg, seen, host, dry=False):
         "date": date,
         "host": host,
         "ssh": ssh,
+        "python": python,
         "threads": int(target["threads"]),
         "stateKey": state_key,
         "status": "checked",
@@ -353,8 +366,9 @@ def submit_task(point, cfg, seen, host, dry=False):
         "order": names,
         "bounds": bounds,
         "units": {"D0": "1e28 cm2/s", "deltaA": "kpc^-1",
-                  "deltaB": "1", "deltaZ": "kpc^-1"},
-        "paths": {name: PARAM_MAP[name] for name in names},
+                  "deltaB": "1", "deltaZ": "kpc^-1", "alpha": "1"},
+        "paths": {**{name: PARAM_MAP[name] for name in names if name != "alpha"},
+                  "alpha": [PARAM_MAP[name] for name in alphas]},
         "actual": actual,
         "fixed": fixed,
         "params": {"DimZ": int(actual["DimZ"]), "Zmax": int(actual["Zmax"])},
@@ -392,11 +406,12 @@ def submit_task(point, cfg, seen, host, dry=False):
                status="preparing", token=file_hash(log) + datetime.now().astimezone().isoformat())
     reserved = False
     try:
-        remote.rpc("reserve", state_key, log, host=ssh, spec=rec)
+        remote.rpc("reserve", state_key, log, host=ssh, python=python, spec=rec)
         reserved = True
         for item in rec["inputs"]:
             companion.upload(item["local"], item["remote"], log, host=ssh)
-        state = remote.rpc("launch", state_key, log, host=ssh, token=rec["token"])
+        state = remote.rpc("launch", state_key, log, host=ssh, python=python,
+                           token=rec["token"])
         rec.update(state)
         view = shlex.join([*companion.SSH, ssh,
                            shlex.join(["tail", "-n", "60", "-F", "--", rec["remoteLog"]])])
@@ -426,7 +441,8 @@ def submit_task(point, cfg, seen, host, dry=False):
     except BaseException:
         if reserved:
             try:
-                remote.rpc("abort", state_key, log, host=ssh, token=rec["token"])
+                remote.rpc("abort", state_key, log, host=ssh, python=python,
+                           token=rec["token"])
             except Exception:
                 pass
         raise
@@ -476,7 +492,8 @@ def collect_task(rec, once=False, quiet=False):
             print(f"{rec['host']} {rec['id']}: {rec['status']}", flush=True)
         if not once:
             time.sleep(20)
-        state = remote.rpc("status", rec["stateKey"], log, host=rec["ssh"])
+        state = remote.rpc("status", rec["stateKey"], log, host=rec["ssh"],
+                           python=rec.get("python", "python3"))
         rec.update(state)
         path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
         if once and rec["status"] in {"launching", "running", "finalizing"}:
@@ -802,7 +819,7 @@ def save_csv(records, batch, result, proposal=None, date=None):
     path = ROOT / "outputs/csv" / f"{date}_BayesOpt.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = [
-        "date", "batch", "host", "stem", "status", "D0", "deltaA", "deltaB", "deltaZ",
+        "date", "batch", "host", "stem", "status", "D0", "deltaA", "deltaB", "deltaZ", "alpha",
         "raw_p", "raw_He", "norm_p", "norm_He", "fit_min",
         "chi2_p", "chi2_He", "chi2_BC", "chi2_total", "optimizer_loss",
         "optimizer_result", "next_proposal", "z8_spectrum", "z14_spectrum",
@@ -831,6 +848,7 @@ def save_csv(records, batch, result, proposal=None, date=None):
                 "stem": rec["id"], "status": rec["status"],
                 "D0": point["D0"], "deltaA": point["deltaA"],
                 "deltaB": point["deltaB"], "deltaZ": point["deltaZ"],
+                "alpha": point["alpha"],
                 "raw_p": raw.get("p"), "raw_He": raw.get("He"),
                 "norm_p": norm.get("p"), "norm_He": norm.get("He"),
                 "fit_min": rec.get("fitMin"),
@@ -876,7 +894,19 @@ def load_history(cfg, seen):
                 raise FileNotFoundError(f"Formal optimization record is missing: {path}")
             rec = json.loads(path.read_text(encoding="utf-8"))
             point = rec.get("candidate")
-            if not isinstance(point, dict) or set(point) != set(cfg["seed"]):
+            if not isinstance(point, dict):
+                raise ValueError(f"Invalid formal candidate record: {path}")
+            point = dict(point)
+            oldnames = {"D0", "deltaA", "deltaB", "deltaZ"}
+            if set(point) == oldnames:
+                doc = load_xml(rec["xml"])
+                alphas = [float(get_param(doc, name)) for name in
+                          ("nucAlpha0", "nucAlpha1", "nucAlpha2", "nucAlpha3")]
+                if len(set(alphas)) != 1:
+                    raise ValueError(f"Historical nuclei slopes contain a break: {path}")
+                point["alpha"] = alphas[0]
+                rec["candidate"] = point
+            if set(point) != set(cfg["seed"]):
                 raise ValueError(f"Invalid formal candidate record: {path}")
             key = tuple(float(point[name]) for name in cfg["seed"])
             if key in seen:
@@ -927,11 +957,11 @@ def main():
     args = parser.parse_args()
     with (Path(__file__).parent / "config.yaml").open(encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle)["search"]
-    names = ["D0", "deltaA", "deltaB", "deltaZ"]
+    names = ["D0", "deltaA", "deltaB", "deltaZ", "alpha"]
     if list(cfg["seed"]) != names:
-        raise ValueError("Seed order must be D0, deltaA, deltaB, deltaZ")
-    if list(cfg["hosts"]) != ["companion", "yellowgiant"]:
-        raise ValueError("The host order must be companion, yellowgiant")
+        raise ValueError("Seed order must be D0, deltaA, deltaB, deltaZ, alpha")
+    if list(cfg["hosts"]) != ["companion", "yellowgiant", "bluegiant", "redgiant"]:
+        raise ValueError("The host order must be companion, yellowgiant, bluegiant, redgiant")
     if not np.isfinite(cfg.get("fitMin", np.nan)) or float(cfg["fitMin"]) < 0:
         raise ValueError("fitMin must be finite and nonnegative")
     cfg["date"] = datetime.now(TOKYO).strftime("%Y-%m-%d")
@@ -1004,7 +1034,7 @@ def main():
                         scored = (scored and target.is_file() and
                                   file_hash(target) == item.get("sha256"))
                 state = remote.rpc("status", rec["stateKey"], Path(rec["log"]),
-                                   host=rec["ssh"])
+                                   host=rec["ssh"], python=rec.get("python", "python3"))
                 if state.get("token") != rec.get("token"):
                     raise ValueError(f"Remote task token differs from the local record: {host}")
                 runok = state.get("status") == "succeeded" and state.get("exitcode") == 0
@@ -1023,10 +1053,15 @@ def main():
                    for rec in records]
         records = [obj_func(cfg["seed"], cfg, seen, rec=rec) for rec in records]
         if all(rec["status"] == "scored" for rec in records):
-            left = np.loadtxt(records[0]["spectrum"], skiprows=1)
-            right = np.loadtxt(records[1]["spectrum"], skiprows=1)
-            scale = np.maximum(np.maximum(np.abs(left), np.abs(right)), np.finfo(float).tiny)
-            parity = float(np.max(np.abs(left - right) / scale))
+            matrices = [np.loadtxt(rec["spectrum"], skiprows=1) for rec in records]
+            if any(item.shape != matrices[0].shape for item in matrices[1:]):
+                raise ValueError("Host Z=14 spectra have different shapes")
+            parity = 0.0
+            for left in matrices:
+                for right in matrices:
+                    scale = np.maximum(np.maximum(np.abs(left), np.abs(right)),
+                                       np.finfo(float).tiny)
+                    parity = max(parity, float(np.max(np.abs(left - right) / scale)))
             result = f"test_stopped; z14_max_relative_difference={parity:.12g}"
         else:
             result = "test_failed; no_next_proposal"
@@ -1035,13 +1070,13 @@ def main():
         for rec in records:
             print(f"{rec['host']}: {rec['status']} chi2={rec.get('total')}", flush=True)
         if any(rec["status"] != "scored" for rec in records):
-            raise RuntimeError("Synchronous two-host test failed; no next proposal was made")
-        print("Two-host test completed; optimizer stopped before the next proposal.", flush=True)
+            raise RuntimeError("Synchronous four-host test failed; no next proposal was made")
+        print("Four-host test completed; optimizer stopped before the next proposal.", flush=True)
         return
 
     bounds = cfg.get("bounds")
     if not isinstance(bounds, dict) or list(bounds) != names:
-        raise ValueError("Set linear bounds for D0, deltaA, deltaB, deltaZ before a full search")
+        raise ValueError("Set linear bounds for D0, deltaA, deltaB, deltaZ, alpha before a full search")
     if args.calls is None or args.calls < 1:
         raise ValueError("--calls must be a positive global candidate count")
     for name, pair in bounds.items():
