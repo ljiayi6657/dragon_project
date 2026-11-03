@@ -492,9 +492,25 @@ def collect_task(rec, once=False, quiet=False):
             print(f"{rec['host']} {rec['id']}: {rec['status']}", flush=True)
         if not once:
             time.sleep(20)
-        state = remote.rpc("status", rec["stateKey"], log, host=rec["ssh"],
-                           python=rec.get("python", "python3"))
+        try:
+            state = remote.rpc("status", rec["stateKey"], log, host=rec["ssh"],
+                               python=rec.get("python", "python3"))
+        except (OSError, RuntimeError) as err:
+            poll_errors = int(rec.get("pollErrors", 0)) + 1
+            rec["pollErrors"] = poll_errors
+            rec["lastPollError"] = str(err)
+            path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+            if poll_errors == 1 or poll_errors % 15 == 0:
+                print(f"Warning: {rec['host']} status retry {poll_errors}: {err}",
+                      flush=True)
+            if once:
+                return rec
+            continue
+        if state.get("token") != rec.get("token"):
+            raise ValueError(f"Remote task token differs from the local record: {rec['host']}")
         rec.update(state)
+        rec["pollErrors"] = 0
+        rec.pop("lastPollError", None)
         path.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
         if once and rec["status"] in {"launching", "running", "finalizing"}:
             return rec
@@ -1104,7 +1120,40 @@ def main():
     issued = 0
     completed = len(history)
     event = 0
+    pending = {"launching", "running", "finalizing", "succeeded"}
+    folder = ROOT / "outputs/bayes"
+    for path in sorted(folder.glob("*_BayesOpt_*.json")):
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        point = rec.get("candidate")
+        host = rec.get("host")
+        if (rec.get("mode") != "bayes" or rec.get("status") not in pending or
+                not isinstance(point, dict) or set(point) != set(names) or
+                host not in cfg["hosts"] or rec.get("record") != str(path)):
+            continue
+        key = tuple(float(point[name]) for name in names)
+        if key in seen:
+            continue
+        for name, value in zip(names, key):
+            low, high = bounds[name]
+            if not float(low) <= value <= float(high):
+                raise ValueError(f"Recoverable candidate is outside current bounds: {path}")
+        target = cfg["hosts"][host]
+        if (rec.get("ssh") != target["ssh"] or
+                rec.get("python") != target.get("python", "python3") or
+                rec.get("program") != target["program"] or
+                rec.get("baselineHash") != file_hash(cfg["base"]) or
+                rec.get("coefficientHash") != file_hash(cfg["coeff"])):
+            raise ValueError(f"Recoverable task differs from the current configuration: {path}")
+        if host in active:
+            raise RuntimeError(f"Multiple recoverable tasks found for {host}")
+        active[host] = rec
+        seen.add(key)
+        stem_key = ("stem", rec["date"], *(name_text(point[name]) for name in names))
+        seen.add(stem_key)
+        print(f"Recovering {host}: {rec['id']}", flush=True)
     for host in cfg["hosts"]:
+        if host in active:
+            continue
         if completed + len(active) >= args.calls:
             break
         point, issued = ask_point(opt, cfg, seen, active, issued)
@@ -1126,7 +1175,21 @@ def main():
             print("Best: unavailable", flush=True)
         changed = False
         for host in list(active):
-            rec = collect_task(active[host], once=True, quiet=True)
+            try:
+                rec = collect_task(active[host], once=True, quiet=True)
+            except (OSError, RuntimeError) as err:
+                rec = active[host]
+                poll_errors = int(rec.get("pollErrors", 0)) + 1
+                rec["pollErrors"] = poll_errors
+                rec["lastPollError"] = str(err)
+                if rec.get("status") not in {"launching", "running", "finalizing"}:
+                    rec["status"] = "finalizing"
+                Path(rec["record"]).write_text(
+                    json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+                if poll_errors == 1 or poll_errors % 15 == 0:
+                    print(f"Warning: {host} retrieval retry {poll_errors}: {err}",
+                          flush=True)
+                continue
             active[host] = rec
             if rec["status"] in {"launching", "running", "finalizing"}:
                 continue
